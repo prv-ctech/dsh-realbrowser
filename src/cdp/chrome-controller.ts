@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CDPClient } from './cdp-client.js';
+import type { BrowserInput, BrowserSnapshot, ViewportMetrics } from '../browser/protocol.js';
 
 /** Build layouts used by the puppeteer / playwright download caches. */
 const CACHED_BUILD_LAYOUTS = [
@@ -134,15 +135,136 @@ export class ChromeController {
   private executablePath?: string;
   private launchPromise: Promise<void> | null = null;
   private userDataDir: string | null = null;
+  private snapshot: BrowserSnapshot = {
+    url: 'about:blank',
+    title: '',
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+  };
+  private snapshotListeners = new Set<(snapshot: BrowserSnapshot) => void>();
+  private cdpDisposers: Array<() => void> = [];
 
   constructor(cdp: CDPClient = new CDPClient(), port = 9222, executablePath?: string) {
     this.cdp = cdp;
     this.port = port;
     this.executablePath = executablePath;
+    const on = (cdp as any).on?.bind(cdp);
+    if (on) {
+      this.cdpDisposers.push(
+        on('Page.frameStartedLoading', () => this.updateSnapshot({ loading: true })),
+        on('Page.frameNavigated', (params: any) => {
+          if (!params?.frame?.parentId && typeof params?.frame?.url === 'string') {
+            this.updateSnapshot({ url: params.frame.url });
+          }
+        }),
+        on('Page.loadEventFired', () => {
+          this.updateSnapshot({ loading: false });
+          void this.refreshHistory();
+        }),
+      );
+    }
   }
 
   private resolveBinary(): string {
     return resolveChromeBinary(this.executablePath);
+  }
+
+  private updateSnapshot(update: Partial<BrowserSnapshot>): void {
+    this.snapshot = { ...this.snapshot, ...update };
+    const value = this.getSnapshot();
+    for (const listener of this.snapshotListeners) listener(value);
+  }
+
+  private async refreshHistory(): Promise<{ currentIndex: number; entries: Array<{ id: number; url?: string; title?: string }> }> {
+    const history = await this.cdp.send<{
+      currentIndex: number;
+      entries: Array<{ id: number; url?: string; title?: string }>;
+    }>('Page.getNavigationHistory');
+    const current = history.entries[history.currentIndex];
+    this.updateSnapshot({
+      ...(current?.url ? { url: current.url } : {}),
+      ...(typeof current?.title === 'string' ? { title: current.title } : {}),
+      canGoBack: history.currentIndex > 0,
+      canGoForward: history.currentIndex < history.entries.length - 1,
+    });
+    return history;
+  }
+
+  async initialize(): Promise<void> {
+    await this.cdp.send('Page.enable');
+    await this.cdp.send('DOM.enable');
+    await this.cdp.send('Runtime.enable');
+    await this.refreshHistory();
+  }
+
+  getSnapshot(): BrowserSnapshot {
+    return { ...this.snapshot };
+  }
+
+  onSnapshot(listener: (snapshot: BrowserSnapshot) => void): () => void {
+    this.snapshotListeners.add(listener);
+    return () => this.snapshotListeners.delete(listener);
+  }
+
+  async setViewport(metrics: ViewportMetrics): Promise<void> {
+    if (!Number.isInteger(metrics.width) || metrics.width <= 0 ||
+        !Number.isInteger(metrics.height) || metrics.height <= 0) {
+      throw new Error('Viewport dimensions must be positive integers');
+    }
+    await this.cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: metrics.width,
+      height: metrics.height,
+      screenWidth: metrics.width,
+      screenHeight: metrics.height,
+      deviceScaleFactor: metrics.deviceScaleFactor,
+      mobile: metrics.mobile,
+    });
+  }
+
+  async goBack(): Promise<void> {
+    const history = await this.refreshHistory();
+    const entry = history.entries[history.currentIndex - 1];
+    if (entry) await this.cdp.send('Page.navigateToHistoryEntry', { entryId: entry.id });
+  }
+
+  async goForward(): Promise<void> {
+    const history = await this.refreshHistory();
+    const entry = history.entries[history.currentIndex + 1];
+    if (entry) await this.cdp.send('Page.navigateToHistoryEntry', { entryId: entry.id });
+  }
+
+  async reload(): Promise<void> {
+    await this.cdp.send('Page.reload', { ignoreCache: false });
+  }
+
+  async dispatchInput(input: BrowserInput): Promise<void> {
+    if (input.kind === 'mouse') {
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: input.type,
+        x: input.x,
+        y: input.y,
+        ...(input.button ? { button: input.button } : {}),
+        ...(input.clickCount === undefined ? {} : { clickCount: input.clickCount }),
+      });
+    } else if (input.kind === 'wheel') {
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        x: input.x,
+        y: input.y,
+        deltaX: input.deltaX,
+        deltaY: input.deltaY,
+      });
+    } else if (input.kind === 'key') {
+      await this.cdp.send('Input.dispatchKeyEvent', {
+        type: input.type,
+        key: input.key,
+        code: input.code,
+        modifiers: input.modifiers,
+      });
+    } else {
+      await this.cdp.send('Input.insertText', { text: input.text });
+    }
   }
 
   async ensureLaunched(headless = true): Promise<void> {
@@ -188,6 +310,7 @@ export class ChromeController {
       this.waitForDebugger()
         .then(() => this.getPageWsUrl())
         .then((wsUrl) => this.cdp.connect(wsUrl))
+        .then(() => this.initialize())
         .then(() => {
           if (!settled) {
             settled = true;
@@ -293,6 +416,8 @@ export class ChromeController {
   }
 
   close(): void {
+    for (const dispose of this.cdpDisposers.splice(0)) dispose();
+    this.snapshotListeners.clear();
     this.cdp.close();
     if (this.proc) {
       this.proc.kill();
