@@ -121,9 +121,50 @@ export function createHostPlugin(options?: HostPluginOptions) {
                 res.statusCode = 200;
                 res.end(JSON.stringify({ url: getState().url }));
               } else if (method === 'navigate') {
+                if (typeof payload.url !== 'string' || !payload.url) throw new Error('Invalid URL');
                 await ensureChrome();
                 await chrome.navigate(payload.url);
                 currentUrl = payload.url;
+                res.statusCode = 200;
+                res.end(JSON.stringify({ ok: true }));
+              } else if (method === 'get-state') {
+                res.statusCode = 200;
+                res.end(JSON.stringify(getState()));
+              } else if (method === 'command') {
+                if (!['back', 'forward', 'reload'].includes(payload.command)) throw new Error('Invalid browser command');
+                await ensureChrome();
+                if (payload.command === 'back') await chrome.goBack();
+                else if (payload.command === 'forward') await chrome.goForward();
+                else await chrome.reload();
+                res.statusCode = 200;
+                res.end(JSON.stringify({ ok: true }));
+              } else if (method === 'set-viewport') {
+                if (typeof payload.id !== 'string') throw new Error('Invalid viewport');
+                const responsiveSize = payload.id === 'responsive'
+                  ? { width: finiteNumber(payload.width, 'width'), height: finiteNumber(payload.height, 'height') }
+                  : { width: 1, height: 1 };
+                const metrics = resolveViewportMetrics(payload.id, responsiveSize);
+                await ensureChrome();
+                await chrome.setViewport(metrics);
+                res.statusCode = 200;
+                res.end(JSON.stringify(metrics));
+              } else if (method === 'input') {
+                const input = parseBrowserInput(payload);
+                await ensureChrome();
+                await chrome.dispatchInput(input);
+                res.statusCode = 200;
+                res.end(JSON.stringify({ ok: true }));
+              } else if (method === 'start-stream') {
+                const maxWidth = finiteNumber(payload.maxWidth, 'maxWidth');
+                const maxHeight = finiteNumber(payload.maxHeight, 'maxHeight');
+                if (maxWidth <= 0 || maxHeight <= 0) throw new Error('Stream dimensions must be positive');
+                await ensureChrome();
+                await chrome.startScreencast(maxWidth, maxHeight);
+                res.statusCode = 200;
+                res.end(JSON.stringify({ ok: true }));
+              } else if (method === 'stop-stream') {
+                await ensureChrome();
+                await chrome.stopScreencast();
                 res.statusCode = 200;
                 res.end(JSON.stringify({ ok: true }));
               } else {

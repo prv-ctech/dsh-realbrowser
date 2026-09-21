@@ -203,6 +203,26 @@ describe('Host Plugin', () => {
     expect(headers.get('x-realbrowser-sequence')).toBe('4');
     expect(headers.get('cache-control')).toBe('no-store');
     expect(response.body).toEqual(Buffer.from('jpeg-bytes'));
+
+    const api = routes.get('/realbrowser/api');
+    const apiResponse: any = {
+      statusCode: 0,
+      body: '',
+      setHeader: vi.fn(),
+      end(value?: unknown) { this.body = value; },
+    };
+    const apiRequest = (method: string, payload: unknown) => ({
+      method: 'POST',
+      url: `/realbrowser/api/${method}`,
+      async *[Symbol.asyncIterator]() { yield JSON.stringify(payload); },
+    });
+    await api.handler(apiRequest('command', { command: 'back' }), apiResponse);
+    expect(apiResponse.statusCode).toBe(200);
+    expect(mockChrome.goBack).toHaveBeenCalledTimes(2);
+    await api.handler(apiRequest('set-viewport', { id: 'desktop-1080p' }), apiResponse);
+    expect(mockChrome.setViewport).toHaveBeenCalledWith(expect.objectContaining({ width: 1920, height: 1080 }));
+    await api.handler(apiRequest('get-state', {}), apiResponse);
+    expect(JSON.parse(apiResponse.body)).toEqual(snapshot);
   });
 
   it('uses globalThis.harness when options.harness is not provided', async () => {
