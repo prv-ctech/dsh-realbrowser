@@ -56,6 +56,9 @@ export function resolveViewportMetrics(
   responsiveSize: Pick<ViewportMetrics, 'width' | 'height'>,
 ): ViewportMetrics {
   if (id === 'responsive') {
+    if (!Number.isFinite(responsiveSize.width) || !Number.isFinite(responsiveSize.height)) {
+      throw new Error('Responsive viewport dimensions must be finite');
+    }
     return {
       width: Math.max(1, Math.round(responsiveSize.width)),
       height: Math.max(1, Math.round(responsiveSize.height)),

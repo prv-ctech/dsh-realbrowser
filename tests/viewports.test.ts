@@ -35,6 +35,12 @@ describe('viewport profiles', () => {
     });
   });
 
+  it('rejects non-finite responsive dimensions', () => {
+    expect(() => resolveViewportMetrics('responsive', { width: Number.NaN, height: 600 })).toThrow(
+      'Responsive viewport dimensions must be finite',
+    );
+  });
+
   it('maps scaled preview coordinates to CSS viewport coordinates', () => {
     expect(mapPreviewPoint(
       { x: 250, y: 125 },
