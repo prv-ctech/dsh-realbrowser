@@ -119,17 +119,22 @@ describe('CDPClient', () => {
     const client = new CDPClient();
     await client.connect(wsUrl);
     const seen: unknown[] = [];
-    const off = client.on('Page.frameNavigated', (params) => seen.push(params));
+    let resolveDelivered!: () => void;
+    const delivered = new Promise<void>((resolve) => { resolveDelivered = resolve; });
+    const off = client.on('Page.frameNavigated', (params) => {
+      seen.push(params);
+      resolveDelivered();
+    });
     const socket = [...wss.clients].at(-1)!;
 
     socket.send(JSON.stringify({ method: 'Page.frameNavigated', params: { frame: { url: 'https://one.test' } } }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await delivered;
     expect(seen).toEqual([{ frame: { url: 'https://one.test' } }]);
 
     off();
     off();
     socket.send(JSON.stringify({ method: 'Page.frameNavigated', params: { frame: { url: 'https://two.test' } } }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await client.send('Page.navigate');
     expect(seen).toHaveLength(1);
     client.close();
   });

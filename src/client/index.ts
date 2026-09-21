@@ -390,7 +390,7 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
   return React.createElement(
     'div',
     { style: { display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: 'var(--dsw-alias-bg-base)' } },
-    React.createElement('style', {}, '.realbrowser-surface:focus{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}'),
+    React.createElement('style', {}, '.realbrowser-surface:focus{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}.realbrowser-viewport:hover{background:var(--dsw-alias-interactive-bg-hover)!important}.realbrowser-viewport:focus-visible{outline:2px solid var(--dsw-alias-border-l3);outline-offset:0}'),
     React.createElement(
       'div',
       { style: toolbarStyle },
@@ -422,12 +422,15 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
         },
       }, pickerActive ? 'Cancel Picker' : 'Pick Element'),
       React.createElement('select', {
+        className: 'realbrowser-viewport',
         value: viewportId,
         onChange: (event: any) => setViewportId(event.target.value),
         'aria-label': 'Viewport',
+        title: VIEWPORT_GROUPS.flatMap((group) => group.options).find((option) => option.id === viewportId)?.label,
         style: {
-          padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l1)',
-          background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)',
+          width: '148px', height: '30px', minWidth: 0, padding: '0 6px', borderRadius: '8px', border: 0,
+          background: 'var(--dsw-alias-fill-l2)', color: 'var(--dsw-alias-label-secondary)',
+          fontSize: '13px', cursor: 'pointer',
         },
       }, ...VIEWPORT_GROUPS.map((group) => React.createElement(
         'optgroup',

@@ -27,11 +27,13 @@ describe('picked element chat bridge', () => {
     ].join('\n'));
   });
 
-  it('preserves draft text and adds a WebP image attachment first', async () => {
-    const order: string[] = [];
-    const setDraft = vi.fn(() => order.push('text'));
-    const addAttachments = vi.fn(() => (order.push('attachment'), true));
-    const createDrafts = vi.fn().mockReturnValue([{ id: 'image-1', kind: 'image' }]);
+  it('adds metadata and WebP attachments without changing the existing draft', async () => {
+    const setDraft = vi.fn();
+    const addAttachments = vi.fn().mockReturnValue(true);
+    const createDrafts = vi.fn().mockReturnValue([
+      { id: 'metadata-1', kind: 'file' },
+      { id: 'image-1', kind: 'image' },
+    ]);
     const conversation = {
       createDrafts,
       input: {
@@ -45,13 +47,13 @@ describe('picked element chat bridge', () => {
 
     await attachPickedElement(ctx, 'session-1', pickedFixture());
 
-    expect(createDrafts).toHaveBeenCalledWith('session-1', [expect.objectContaining({
-      name: 'realbrowser-element.webp',
-      type: 'image/webp',
-    })]);
-    expect(addAttachments).toHaveBeenCalledWith(['image-1']);
-    expect(setDraft).toHaveBeenCalledWith(expect.stringContaining('Existing note\n\nSelected website element'));
-    expect(order).toEqual(['attachment', 'text']);
+    const files = createDrafts.mock.calls[0][1] as File[];
+    expect(files).toHaveLength(2);
+    expect(files[0]).toMatchObject({ name: 'realbrowser-element.txt', type: 'text/plain' });
+    expect(await files[0].text()).toBe(formatPickedElementDraft(pickedFixture()));
+    expect(files[1]).toMatchObject({ name: 'realbrowser-element.webp', type: 'image/webp' });
+    expect(addAttachments).toHaveBeenCalledWith(['metadata-1', 'image-1']);
+    expect(setDraft).not.toHaveBeenCalled();
   });
 
   it('rejects missing Conversation integration', async () => {
@@ -63,7 +65,10 @@ describe('picked element chat bridge', () => {
     const setDraft = vi.fn();
     const releaseDraftAttachment = vi.fn();
     const conversation = {
-      createDrafts: vi.fn().mockReturnValue([{ id: 'image-1', kind: 'image' }]),
+      createDrafts: vi.fn().mockReturnValue([
+        { id: 'metadata-1', kind: 'file' },
+        { id: 'image-1', kind: 'image' },
+      ]),
       releaseDraftAttachment,
       input: {
         shell: vi.fn().mockReturnValue({
@@ -79,7 +84,8 @@ describe('picked element chat bridge', () => {
       pickedFixture(),
     )).rejects.toThrow('could not be added');
 
-    expect(releaseDraftAttachment).toHaveBeenCalledWith('image-1');
+    expect(releaseDraftAttachment).toHaveBeenNthCalledWith(1, 'metadata-1');
+    expect(releaseDraftAttachment).toHaveBeenNthCalledWith(2, 'image-1');
     expect(setDraft).not.toHaveBeenCalled();
   });
 });

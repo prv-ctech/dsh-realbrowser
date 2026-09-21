@@ -77,7 +77,9 @@ describe('RealBrowserPanel', () => {
     const image = created.find((element) => element.type === 'img');
     expect(image).toBeDefined();
     expect(image.props.tabIndex).toBe(0);
-    expect(created.find((element) => element.type === 'select').props['aria-label']).toBe('Viewport');
+    const viewport = created.find((element) => element.type === 'select');
+    expect(viewport.props['aria-label']).toBe('Viewport');
+    expect(viewport.props.style.width).toBe('148px');
   });
 
   it('sends host navigation commands', () => {

@@ -325,9 +325,14 @@ export class ChromeController {
     y: number,
   ): Promise<Omit<PickedElementResult, 'screenshotBase64' | 'screenshotMediaType'>> {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Element coordinates must be finite');
+    const layout = await this.cdp.send<{ cssLayoutViewport?: { pageX: number; pageY: number } }>('Page.getLayoutMetrics');
+    const viewport = layout.cssLayoutViewport;
+    if (!viewport || ![viewport.pageX, viewport.pageY].every(Number.isFinite)) {
+      throw new Error('Browser viewport metrics are unavailable');
+    }
     const location = await this.cdp.send<{ nodeId?: number; backendNodeId?: number }>('DOM.getNodeForLocation', {
-      x,
-      y,
+      x: x + viewport.pageX,
+      y: y + viewport.pageY,
       includeUserAgentShadowDOM: true,
     });
     const node = location.nodeId
@@ -379,12 +384,30 @@ export class ChromeController {
 
   async pickElementAt(x: number, y: number): Promise<PickedElementResult> {
     const selection = await this.inspectElementAt(x, y);
+    const layout = await this.cdp.send<{
+      cssLayoutViewport?: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
+    }>('Page.getLayoutMetrics');
+    const viewport = layout.cssLayoutViewport;
+    if (!viewport || ![viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight].every(Number.isFinite)) {
+      throw new Error('Browser viewport metrics are unavailable');
+    }
+    const left = Math.max(selection.bounds.x, 0);
+    const top = Math.max(selection.bounds.y, 0);
+    const right = Math.min(selection.bounds.x + selection.bounds.width, viewport.clientWidth);
+    const bottom = Math.min(selection.bounds.y + selection.bounds.height, viewport.clientHeight);
+    if (right <= left || bottom <= top) throw new Error('Element moved outside the viewport before capture');
     const shot = await this.cdp.send<{ data: string }>('Page.captureScreenshot', {
       format: 'webp',
       quality: 82,
       fromSurface: true,
       captureBeyondViewport: true,
-      clip: { ...selection.bounds, scale: 1 },
+      clip: {
+        x: viewport.pageX + left,
+        y: viewport.pageY + top,
+        width: right - left,
+        height: bottom - top,
+        scale: 1,
+      },
     });
     if (typeof shot.data !== 'string' || !shot.data) throw new Error('Element screenshot returned no image data');
     return { ...selection, screenshotBase64: shot.data, screenshotMediaType: 'image/webp' };

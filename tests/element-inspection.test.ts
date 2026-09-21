@@ -14,6 +14,9 @@ function elementCdpFake(overrides: Record<string, unknown> = {}) {
       html: '<button type="submit">Sign in</button>',
       url: 'https://example.test/login',
     } } },
+    'Page.getLayoutMetrics': {
+      cssLayoutViewport: { pageX: 0, pageY: 0, clientWidth: 800, clientHeight: 600 },
+    },
     'Page.captureScreenshot': { data: Buffer.from('webp').toString('base64') },
     'Runtime.releaseObject': {},
   };
@@ -51,6 +54,38 @@ describe('element inspection', () => {
       clip: { x: 100, y: 60, width: 180, height: 44, scale: 1 },
     }));
     expect(send).toHaveBeenCalledWith('Runtime.releaseObject', { objectId: 'object-7' });
+  });
+
+  it('clips oversized element screenshots to the visible viewport', async () => {
+    const { cdp, send } = elementCdpFake({
+      'DOM.getBoxModel': { model: { border: [0, 0, 800, 0, 800, 100000, 0, 100000] } },
+    });
+
+    await new ChromeController(cdp).pickElementAt(500, 500);
+
+    expect(send).toHaveBeenCalledWith('Page.captureScreenshot', expect.objectContaining({
+      clip: { x: 0, y: 0, width: 800, height: 600, scale: 1 },
+    }));
+  });
+
+  it('translates viewport coordinates and screenshot clips after scrolling', async () => {
+    const { cdp, send } = elementCdpFake({
+      'Page.getLayoutMetrics': {
+        cssLayoutViewport: { pageX: 0, pageY: 50000, clientWidth: 800, clientHeight: 600 },
+      },
+      'DOM.getBoxModel': { model: { border: [40, 100, 200, 100, 200, 160, 40, 160] } },
+    });
+
+    await new ChromeController(cdp).pickElementAt(80, 130);
+
+    expect(send).toHaveBeenCalledWith('DOM.getNodeForLocation', {
+      x: 80,
+      y: 50130,
+      includeUserAgentShadowDOM: true,
+    });
+    expect(send).toHaveBeenCalledWith('Page.captureScreenshot', expect.objectContaining({
+      clip: { x: 40, y: 50100, width: 160, height: 60, scale: 1 },
+    }));
   });
 
   it('inspects hover metadata without capturing an image', async () => {

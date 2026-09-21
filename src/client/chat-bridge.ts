@@ -10,6 +10,10 @@ export function formatPickedElementDraft(result: PickedElementResult): string {
   ].join('\n');
 }
 
+function metadataFile(result: PickedElementResult): File {
+  return new File([formatPickedElementDraft(result)], 'realbrowser-element.txt', { type: 'text/plain' });
+}
+
 function webpFile(result: PickedElementResult): File {
   if (result.screenshotMediaType !== 'image/webp' || !result.screenshotBase64) {
     throw new Error('Selected element has no WebP screenshot');
@@ -29,23 +33,17 @@ export async function attachPickedElement(
   if (!conversation) throw new Error('Conversation service is unavailable');
   if (!sessionId) throw new Error('Conversation session is unavailable');
 
-  const drafts = conversation.createDrafts(sessionId, [webpFile(result)]);
+  const drafts = conversation.createDrafts(sessionId, [metadataFile(result), webpFile(result)]);
   const ids = drafts?.map((draft: any) => draft?.id).filter((id: unknown) => typeof id === 'string');
-  if (!ids?.length) throw new Error('Conversation did not create an image attachment');
+  if (ids?.length !== 2) throw new Error('Conversation did not create the selected element attachments');
 
   let attached = false;
   let shell: any;
   try {
     shell = conversation.input?.shell?.(sessionId);
-    if (!shell?.state?.getSnapshot || !shell?.actions?.setDraft || !shell?.actions?.addAttachments) {
-      throw new Error('Conversation draft is unavailable');
-    }
+    if (!shell?.actions?.addAttachments) throw new Error('Conversation draft is unavailable');
     attached = shell.actions.addAttachments(ids) === true;
-    if (!attached) throw new Error('Selected element attachment could not be added');
-
-    const existing = String(shell.state.getSnapshot()?.draft ?? '').replace(/\n+$/, '');
-    const metadata = formatPickedElementDraft(result);
-    shell.actions.setDraft(existing ? `${existing}\n\n${metadata}` : metadata);
+    if (!attached) throw new Error('Selected element attachments could not be added');
   } catch (error) {
     if (attached) {
       for (const id of ids) shell?.actions?.removeAttachment?.(id);
