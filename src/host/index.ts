@@ -12,6 +12,12 @@ export function createHostPlugin(options?: HostPluginOptions) {
   const chrome = options?.chrome || new ChromeController();
   const startProxy = options?.startProxy || startProxyServer;
 
+  const ensureChrome = async () => {
+    if (typeof chrome.ensureLaunched === 'function') {
+      await chrome.ensureLaunched();
+    }
+  };
+
   return {
     async apply(ctx: any) {
       proxyInstance = await startProxy();
@@ -23,6 +29,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
         });
 
         harness.handle('realbrowser-navigate', async (args: { url: string }) => {
+          await ensureChrome();
           await chrome.navigate(args.url);
           return { ok: true };
         });
@@ -37,6 +44,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
               required: ['url'],
             },
             execute: async ({ url }: { url: string }) => {
+              await ensureChrome();
               await chrome.navigate(url);
               return `Navigated to ${url}`;
             },
@@ -51,6 +59,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
               required: ['selector'],
             },
             execute: async ({ selector }: { selector: string }) => {
+              await ensureChrome();
               await chrome.click(selector);
               return `Clicked ${selector}`;
             },
@@ -68,6 +77,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
               required: ['selector', 'text'],
             },
             execute: async ({ selector, text }: { selector: string; text: string }) => {
+              await ensureChrome();
               await chrome.type(selector, text);
               return `Typed into ${selector}`;
             },
@@ -82,6 +92,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
               required: ['expression'],
             },
             execute: async ({ expression }: { expression: string }) => {
+              await ensureChrome();
               const result = await chrome.evaluate(expression);
               return JSON.stringify(result);
             },

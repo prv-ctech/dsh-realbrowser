@@ -224,6 +224,28 @@ describe('ChromeController', () => {
     expect((controller as any).proc).toBeNull();
   });
 
+  it('ensureLaunched returns immediately if proc exists', async () => {
+    const controller = new ChromeController(mockCdp);
+    (controller as any).proc = { kill: vi.fn() };
+    const launchSpy = vi.spyOn(controller, 'launch').mockResolvedValue(undefined);
+    await controller.ensureLaunched();
+    expect(launchSpy).not.toHaveBeenCalled();
+  });
+
+  it('ensureLaunched launches once on concurrent calls', async () => {
+    const controller = new ChromeController(mockCdp);
+    let resolveLaunch!: () => void;
+    const launchPromise = new Promise<void>((res) => { resolveLaunch = res; });
+    const launchSpy = vi.spyOn(controller, 'launch').mockImplementation(() => launchPromise);
+
+    const p1 = controller.ensureLaunched();
+    const p2 = controller.ensureLaunched();
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+
+    resolveLaunch();
+    await Promise.all([p1, p2]);
+  });
+
   it('waitForDebugger times out if port is unreachable', async () => {
     // Port 1 is not open
     const controller = new ChromeController(mockCdp, 1);

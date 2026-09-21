@@ -9,6 +9,7 @@ export class ChromeController {
   private cdp: CDPClient;
   public port: number;
   private executablePath?: string;
+  private launchPromise: Promise<void> | null = null;
 
   constructor(cdp: CDPClient = new CDPClient(), port = 9222, executablePath?: string) {
     this.cdp = cdp;
@@ -41,6 +42,16 @@ export class ChromeController {
       }
     }
     return candidates[0];
+  }
+
+  async ensureLaunched(headless = true): Promise<void> {
+    if (this.proc) return;
+    if (!this.launchPromise) {
+      this.launchPromise = this.launch(headless).finally(() => {
+        this.launchPromise = null;
+      });
+    }
+    return this.launchPromise;
   }
 
   async launch(headless = true): Promise<void> {
@@ -155,5 +166,6 @@ export class ChromeController {
       this.proc.kill();
       this.proc = null;
     }
+    this.launchPromise = null;
   }
 }

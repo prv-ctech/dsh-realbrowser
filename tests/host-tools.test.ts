@@ -128,5 +128,62 @@ describe('Host Plugin', () => {
     await expect(plugin.apply({})).resolves.toBeUndefined();
     expect(mockStartProxy).toHaveBeenCalled();
   });
+
+  it('ensures Chrome is launched before executing tools', async () => {
+    const tools = new Map<string, any>();
+    const mockHarness = {
+      handle: vi.fn(),
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+    };
+
+    const callOrder: string[] = [];
+    const mockChrome = {
+      ensureLaunched: vi.fn().mockImplementation(async () => {
+        callOrder.push('ensureLaunched');
+      }),
+      navigate: vi.fn().mockImplementation(async () => {
+        callOrder.push('navigate');
+      }),
+      click: vi.fn().mockImplementation(async () => {
+        callOrder.push('click');
+      }),
+      type: vi.fn().mockImplementation(async () => {
+        callOrder.push('type');
+      }),
+      evaluate: vi.fn().mockImplementation(async () => {
+        callOrder.push('evaluate');
+        return 'test';
+      }),
+      close: vi.fn(),
+    };
+
+    const plugin = createHostPlugin({
+      harness: mockHarness,
+      chrome: mockChrome,
+      startProxy: vi.fn().mockResolvedValue({ port: 8888, close: vi.fn() }),
+    });
+
+    await plugin.apply({});
+
+    // Test realbrowser_navigate
+    callOrder.length = 0;
+    await tools.get('realbrowser_navigate').execute({ url: 'https://example.com' });
+    expect(callOrder).toEqual(['ensureLaunched', 'navigate']);
+
+    // Test realbrowser_click
+    callOrder.length = 0;
+    await tools.get('realbrowser_click').execute({ selector: '#btn' });
+    expect(callOrder).toEqual(['ensureLaunched', 'click']);
+
+    // Test realbrowser_type
+    callOrder.length = 0;
+    await tools.get('realbrowser_type').execute({ selector: '#input', text: 'abc' });
+    expect(callOrder).toEqual(['ensureLaunched', 'type']);
+
+    // Test realbrowser_evaluate
+    callOrder.length = 0;
+    await tools.get('realbrowser_evaluate').execute({ expression: '1+1' });
+    expect(callOrder).toEqual(['ensureLaunched', 'evaluate']);
+  });
 });
 
