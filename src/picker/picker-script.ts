@@ -63,9 +63,11 @@ export function generatePickerScript(): string {
     if (!el || el.nodeType !== Node.ELEMENT_NODE) return '';
     if (el.id) return '//*[@id="' + el.id + '"]';
     let path = [];
+    let hasId = false;
     while (el && el.nodeType === Node.ELEMENT_NODE) {
       if (el.id) {
-        path.unshift('/*[@id="' + el.id + '"]');
+        path.unshift('*[@id="' + el.id + '"]');
+        hasId = true;
         break;
       }
       let tag = el.nodeName.toLowerCase();
@@ -80,7 +82,8 @@ export function generatePickerScript(): string {
       path.unshift(tag + '[' + index + ']');
       el = el.parentNode;
     }
-    return path.length ? '/' + path.join('/') : '';
+    if (!path.length) return '';
+    return (hasId ? '//' : '/') + path.join('/');
   }
 
   window.addEventListener('message', (e) => {

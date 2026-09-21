@@ -71,9 +71,11 @@ export function getXPath(target: string | ElementLike, index = 1): string {
   }
   const parts: string[] = [];
   let current: ElementLike | null | undefined = target;
+  let hasId = false;
   while (current) {
     if (current.id && current.id.trim()) {
       parts.unshift(`*[@id="${current.id.trim()}"]`);
+      hasId = true;
       break;
     }
     const tag = current.tagName.toLowerCase();
@@ -81,5 +83,5 @@ export function getXPath(target: string | ElementLike, index = 1): string {
     parts.unshift(`${tag}[${idx}]`);
     current = current.parentElement;
   }
-  return `//${parts.join('/')}`;
+  return parts.length ? `${hasId ? '//' : '/'}${parts.join('/')}` : '';
 }

@@ -144,6 +144,51 @@ describe('Selector Generator', () => {
     expect(getXPath(elInForm)).toBe('//*[@id="form-wrapper"]/input[2]');
   });
 
+  it('generates valid xpath syntax without double or triple slashes', () => {
+    const grandparent: ElementLike = {
+      tagName: 'HTML',
+      classList: [],
+    };
+    const parent: ElementLike = {
+      tagName: 'BODY',
+      classList: [],
+      parentElement: grandparent,
+    };
+    const child: ElementLike = {
+      tagName: 'DIV',
+      classList: [],
+      parentElement: parent,
+      index: 1,
+    };
+
+    const xpathNoId = getXPath(child);
+    expect(xpathNoId).toBe('/html[1]/body[1]/div[1]');
+    expect(xpathNoId).not.toMatch(/^\/{2,}/);
+    expect(xpathNoId).not.toMatch(/\/{2,}/);
+
+    const idGrandparent: ElementLike = {
+      id: 'main-container',
+      tagName: 'DIV',
+      classList: [],
+    };
+    const idParent: ElementLike = {
+      tagName: 'SECTION',
+      classList: [],
+      parentElement: idGrandparent,
+    };
+    const idChild: ElementLike = {
+      tagName: 'P',
+      classList: [],
+      parentElement: idParent,
+      index: 1,
+    };
+
+    const xpathWithId = getXPath(idChild);
+    expect(xpathWithId).toBe('//*[@id="main-container"]/section[1]/p[1]');
+    expect(xpathWithId).not.toContain('///');
+    expect(xpathWithId).not.toMatch(/\/{3,}/);
+  });
+
   describe('CSS Identifier Escaping', () => {
     const originalWindow = (globalThis as any).window;
 
@@ -196,8 +241,30 @@ describe('Picker Script Generator', () => {
     expect(script).toContain('CSS.escape');
   });
 
-  it('includes in-script DOM getXPath helper', () => {
+  it('includes in-script DOM getXPath helper that produces valid XPath syntax', () => {
     const script = generatePickerScript();
     expect(script).toContain('function getXPath(el)');
+    expect(script).not.toContain("path.unshift('/*[@id=\"'");
+
+    const extractXPathFn = new Function(`
+      const Node = { ELEMENT_NODE: 1 };
+      ${script.match(/function getXPath\(el\) \{[\s\S]*?\n  \}/)?.[0]};
+      return getXPath;
+    `)();
+
+    const root = { nodeType: 1, id: 'app', nodeName: 'DIV', parentNode: null, previousElementSibling: null };
+    const child = { nodeType: 1, id: '', nodeName: 'SPAN', parentNode: root, previousElementSibling: null };
+    const xpathWithId = extractXPathFn(child);
+    expect(xpathWithId).toBe('//*[@id="app"]/span[1]');
+    expect(xpathWithId).not.toContain('///');
+    expect(xpathWithId).not.toMatch(/\/{3,}/);
+
+    const html = { nodeType: 1, id: '', nodeName: 'HTML', parentNode: null, previousElementSibling: null };
+    const body = { nodeType: 1, id: '', nodeName: 'BODY', parentNode: html, previousElementSibling: null };
+    const div = { nodeType: 1, id: '', nodeName: 'DIV', parentNode: body, previousElementSibling: null };
+    const xpathNoId = extractXPathFn(div);
+    expect(xpathNoId).toBe('/html[1]/body[1]/div[1]');
+    expect(xpathNoId).not.toMatch(/^\/{2,}/);
+    expect(xpathNoId).not.toMatch(/\/{2,}/);
   });
 });
