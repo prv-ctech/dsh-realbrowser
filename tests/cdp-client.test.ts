@@ -433,6 +433,14 @@ describe('ChromeController', () => {
     expect(controller.port).toBe(0);
   });
 
+  it('allows 10 seconds for Chrome debugger readiness by default', async () => {
+    const controller = new ChromeController(mockCdp, 1);
+    const waitForDebugger = vi.spyOn(controller as any, 'waitForDebugger').mockRejectedValue(new Error('stop'));
+
+    await expect(controller.launch()).rejects.toThrow('stop');
+    expect(waitForDebugger).toHaveBeenCalledWith(40, expect.any(Function));
+  });
+
   it('waitForDebugger times out if port is unreachable', async () => {
     // Port 1 is not open
     const controller = new ChromeController(mockCdp, 1);

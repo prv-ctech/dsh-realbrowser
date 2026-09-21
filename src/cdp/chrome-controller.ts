@@ -513,7 +513,7 @@ export class ChromeController {
 
       void (async () => {
         try {
-          await this.waitForDebugger(20, () => settled);
+          await this.waitForDebugger(40, () => settled);
           if (settled) return;
           debuggerReady = true;
           const wsUrl = await this.getPageWsUrl();
