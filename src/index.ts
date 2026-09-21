@@ -1,3 +1,5 @@
+export * from './browser/protocol.js';
+export * from './browser/viewports.js';
 export * from './picker/selector-generator.js';
 export * from './picker/picker-script.js';
 export * from './proxy/header-filter.js';
