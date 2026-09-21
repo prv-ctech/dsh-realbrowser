@@ -8,6 +8,7 @@ export class CDPClient {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<number, { resolve: (val: any) => void; reject: (err: any) => void }>();
+  private listeners = new Map<string, Set<(params: any) => void>>();
 
   async connect(wsUrl: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -33,6 +34,16 @@ export class CDPClient {
           this.pending.delete(msg.id);
           if (msg.error) reject(new Error(msg.error.message));
           else resolve(msg.result);
+          return;
+        }
+        if (typeof msg?.method === 'string') {
+          for (const listener of this.listeners.get(msg.method) ?? []) {
+            try {
+              listener(msg.params);
+            } catch {
+              // One faulty subscriber must not stop CDP event delivery.
+            }
+          }
         }
       });
     });
@@ -43,6 +54,16 @@ export class CDPClient {
       reject(err);
     }
     this.pending.clear();
+  }
+
+  on(method: string, listener: (params: any) => void): () => void {
+    let listeners = this.listeners.get(method);
+    if (!listeners) this.listeners.set(method, listeners = new Set());
+    listeners.add(listener);
+    return () => {
+      listeners?.delete(listener);
+      if (listeners?.size === 0) this.listeners.delete(method);
+    };
   }
 
   send<T = any>(method: string, params?: Record<string, unknown>): Promise<T> {

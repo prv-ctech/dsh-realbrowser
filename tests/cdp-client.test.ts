@@ -114,6 +114,39 @@ describe('CDPClient', () => {
     expect(result).toEqual({ frameId: '123' });
     client.close();
   });
+
+  it('delivers CDP events and disposes subscriptions', async () => {
+    const client = new CDPClient();
+    await client.connect(wsUrl);
+    const seen: unknown[] = [];
+    const off = client.on('Page.frameNavigated', (params) => seen.push(params));
+    const socket = [...wss.clients].at(-1)!;
+
+    socket.send(JSON.stringify({ method: 'Page.frameNavigated', params: { frame: { url: 'https://one.test' } } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toEqual([{ frame: { url: 'https://one.test' } }]);
+
+    off();
+    off();
+    socket.send(JSON.stringify({ method: 'Page.frameNavigated', params: { frame: { url: 'https://two.test' } } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toHaveLength(1);
+    client.close();
+  });
+
+  it('continues dispatching when an event listener throws', async () => {
+    const client = new CDPClient();
+    await client.connect(wsUrl);
+    const seen: unknown[] = [];
+    client.on('Page.loadEventFired', () => { throw new Error('listener failed'); });
+    client.on('Page.loadEventFired', (params) => seen.push(params));
+
+    [...wss.clients].at(-1)!.send(JSON.stringify({ method: 'Page.loadEventFired', params: { timestamp: 1 } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seen).toEqual([{ timestamp: 1 }]);
+    client.close();
+  });
 });
 
 describe('ChromeController', () => {
