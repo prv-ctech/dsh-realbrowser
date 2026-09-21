@@ -13,10 +13,22 @@ export class CDPClient {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl);
       this.ws.on('open', () => resolve());
-      this.ws.on('error', reject);
+      this.ws.on('error', (err) => {
+        this.rejectAllPending(err instanceof Error ? err : new Error(String(err)));
+        reject(err);
+      });
+      this.ws.on('close', (code, reason) => {
+        const reasonStr = reason ? reason.toString() : '';
+        this.rejectAllPending(new Error(`WebSocket closed: ${code}${reasonStr ? ` ${reasonStr}` : ''}`));
+      });
       this.ws.on('message', (data: WebSocket.RawData) => {
-        const msg = JSON.parse(data.toString());
-        if (msg.id && this.pending.has(msg.id)) {
+        let msg: any;
+        try {
+          msg = JSON.parse(data.toString());
+        } catch {
+          return;
+        }
+        if (msg && msg.id && this.pending.has(msg.id)) {
           const { resolve, reject } = this.pending.get(msg.id)!;
           this.pending.delete(msg.id);
           if (msg.error) reject(new Error(msg.error.message));
@@ -24,6 +36,13 @@ export class CDPClient {
         }
       });
     });
+  }
+
+  private rejectAllPending(err: Error): void {
+    for (const [, { reject }] of this.pending) {
+      reject(err);
+    }
+    this.pending.clear();
   }
 
   send<T = any>(method: string, params?: Record<string, unknown>): Promise<T> {
@@ -38,6 +57,7 @@ export class CDPClient {
   }
 
   close(): void {
+    this.rejectAllPending(new Error('WebSocket closed'));
     if (this.ws) {
       this.ws.close();
       this.ws = null;

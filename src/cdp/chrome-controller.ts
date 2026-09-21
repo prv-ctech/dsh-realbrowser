@@ -1,18 +1,50 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { CDPClient } from './cdp-client.js';
 
 export class ChromeController {
   private proc: ChildProcess | null = null;
   private cdp: CDPClient;
   public port: number;
+  private executablePath?: string;
 
-  constructor(cdp: CDPClient = new CDPClient(), port = 9222) {
+  constructor(cdp: CDPClient = new CDPClient(), port = 9222, executablePath?: string) {
     this.cdp = cdp;
     this.port = port;
+    this.executablePath = executablePath;
+  }
+
+  private resolveBinary(): string {
+    if (this.executablePath) return this.executablePath;
+    if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+    if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
+
+    const candidates = ['google-chrome', 'chromium', 'chromium-browser'];
+    const pathEnv = process.env.PATH || '';
+    const delimiter = process.platform === 'win32' ? ';' : ':';
+    const dirs = pathEnv.split(delimiter);
+
+    for (const candidate of candidates) {
+      for (const dir of dirs) {
+        if (!dir) continue;
+        const fullPath = path.join(dir, candidate);
+        try {
+          if (fs.existsSync(fullPath)) {
+            fs.accessSync(fullPath, fs.constants.X_OK);
+            return fullPath;
+          }
+        } catch {
+          // ignore and continue
+        }
+      }
+    }
+    return candidates[0];
   }
 
   async launch(headless = true): Promise<void> {
+    const binary = this.resolveBinary();
     const args = [
       `--remote-debugging-port=${this.port}`,
       headless ? '--headless=new' : '',
@@ -21,10 +53,39 @@ export class ChromeController {
       'about:blank',
     ].filter(Boolean);
 
-    this.proc = spawn('google-chrome', args, { stdio: 'ignore' });
-    await this.waitForDebugger();
-    const wsUrl = await this.getPageWsUrl();
-    await this.cdp.connect(wsUrl);
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const proc = spawn(binary, args, { stdio: 'ignore' });
+      this.proc = proc;
+
+      proc.on('error', (err) => {
+        if (!settled) {
+          settled = true;
+          this.proc = null;
+          reject(err);
+        }
+      });
+
+      this.waitForDebugger()
+        .then(() => this.getPageWsUrl())
+        .then((wsUrl) => this.cdp.connect(wsUrl))
+        .then(() => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        })
+        .catch((err) => {
+          if (!settled) {
+            settled = true;
+            if (this.proc) {
+              this.proc.kill();
+              this.proc = null;
+            }
+            reject(err);
+          }
+        });
+    });
   }
 
   private async waitForDebugger(maxRetries = 20): Promise<void> {

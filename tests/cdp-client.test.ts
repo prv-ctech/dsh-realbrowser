@@ -86,6 +86,31 @@ describe('CDPClient', () => {
     client.close();
     await expect(client.send('Page.navigate')).rejects.toThrow('WebSocket not connected');
   });
+
+  it('rejects pending promises when client is closed', async () => {
+    const client = new CDPClient();
+    await client.connect(wsUrl);
+    const promise = client.send('Pending.test');
+    client.close();
+    await expect(promise).rejects.toThrow('WebSocket closed');
+  });
+
+  it('rejects pending promises when WebSocket disconnects', async () => {
+    const client = new CDPClient();
+    await client.connect(wsUrl);
+    const promise = client.send('Pending.test');
+    (client as any).ws?.close();
+    await expect(promise).rejects.toThrow(/WebSocket closed/);
+  });
+
+  it('handles malformed JSON message without crashing', async () => {
+    const client = new CDPClient();
+    await client.connect(wsUrl);
+    (client as any).ws?.emit('message', Buffer.from('invalid json {{{'));
+    const result = await client.send('Page.navigate', { url: 'https://example.com' });
+    expect(result).toEqual({ frameId: '123' });
+    client.close();
+  });
 });
 
 describe('ChromeController', () => {
@@ -249,5 +274,10 @@ describe('ChromeController', () => {
     await expect((controller as any).getPageWsUrl()).rejects.toThrow('No page target found');
 
     mockHttp.close();
+  });
+
+  it('handles process spawn error and rejects launch without crashing', async () => {
+    const controller = new ChromeController(mockCdp, 9222, 'nonexistent-chrome-binary-test-xyz');
+    await expect(controller.launch()).rejects.toThrow();
   });
 });
