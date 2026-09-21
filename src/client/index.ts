@@ -18,8 +18,15 @@ export function injectIntoChatTextarea(text: string): boolean {
   if (typeof document === 'undefined') return false;
   const textarea = document.querySelector('textarea');
   if (textarea) {
-    textarea.value = textarea.value ? `${textarea.value}\n${text}` : text;
+    const newText = textarea.value ? `${textarea.value}\n${text}` : text;
+    const win = typeof window !== 'undefined' ? window : (globalThis as any);
+    const setter = win.HTMLTextAreaElement?.prototype
+      ? Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, 'value')?.set
+      : undefined;
+    if (setter) setter.call(textarea, newText);
+    else textarea.value = newText;
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
     textarea.focus();
     return true;
   }
@@ -41,10 +48,32 @@ export function createClientPlugin(host: any) {
           const [viewport, setViewport] = React.useState('100%');
           const iframeRef = React.useRef(null);
 
+          const navigateTo = (newUrl: string) => {
+            setUrl(newUrl);
+            host.call('realbrowser-navigate', { url: newUrl }).catch(() => {});
+          };
+
           React.useEffect(() => {
             host.call('realbrowser-get-proxy').then((res: any) => {
               if (res && res.port) setProxyPort(res.port);
             });
+
+            const syncUrl = () => {
+              host.call('realbrowser-get-current-url').then((res: any) => {
+                if (res && res.url) {
+                  setUrl((prevUrl: string) => {
+                    if (res.url !== prevUrl) {
+                      setInputUrl(res.url);
+                      return res.url;
+                    }
+                    return prevUrl;
+                  });
+                }
+              }).catch(() => {});
+            };
+
+            syncUrl();
+            const pollInterval = setInterval(syncUrl, 1000);
 
             const onMessage = (e: MessageEvent) => {
               if (iframeRef.current && e.source !== iframeRef.current.contentWindow) return;
@@ -57,7 +86,10 @@ export function createClientPlugin(host: any) {
               }
             };
             window.addEventListener('message', onMessage);
-            return () => window.removeEventListener('message', onMessage);
+            return () => {
+              clearInterval(pollInterval);
+              window.removeEventListener('message', onMessage);
+            };
           }, []);
 
           const togglePicker = () => {
@@ -79,16 +111,28 @@ export function createClientPlugin(host: any) {
             // Toolbar
             React.createElement(
               'div',
-              { style: { display: 'flex', gap: '8px', padding: '8px', background: '#1e293b', borderBottom: '1px solid #334155' } },
+              { style: { display: 'flex', gap: '8px', padding: '8px', background: '#1e293b', borderBottom: '1px solid #334155', alignItems: 'center' } },
+              React.createElement('button', {
+                onClick: () => iframeRef.current?.contentWindow?.history?.back?.(),
+                style: { padding: '4px 8px', background: '#334155', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
+              }, 'Back'),
+              React.createElement('button', {
+                onClick: () => iframeRef.current?.contentWindow?.history?.forward?.(),
+                style: { padding: '4px 8px', background: '#334155', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
+              }, 'Forward'),
+              React.createElement('button', {
+                onClick: () => iframeRef.current?.contentWindow?.location?.reload?.(),
+                style: { padding: '4px 8px', background: '#334155', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
+              }, 'Reload'),
               React.createElement('input', {
                 value: inputUrl,
                 onChange: (e: any) => setInputUrl(e.target.value),
-                onKeyDown: (e: any) => { if (e.key === 'Enter') setUrl(inputUrl); },
+                onKeyDown: (e: any) => { if (e.key === 'Enter') navigateTo(inputUrl); },
                 style: { flex: 1, padding: '4px 8px', borderRadius: '4px', border: '1px solid #475569', background: '#0f172a', color: '#fff' },
                 placeholder: 'Enter URL...',
               }),
               React.createElement('button', {
-                onClick: () => setUrl(inputUrl),
+                onClick: () => navigateTo(inputUrl),
                 style: { padding: '4px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' },
               }, 'Go'),
               React.createElement('button', {

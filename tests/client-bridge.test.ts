@@ -27,13 +27,16 @@ describe('Client Bridge', () => {
 
   describe('injectIntoChatTextarea', () => {
     let originalDocument: any;
+    let originalWindow: any;
 
     beforeEach(() => {
       originalDocument = (globalThis as any).document;
+      originalWindow = (globalThis as any).window;
     });
 
     afterEach(() => {
       (globalThis as any).document = originalDocument;
+      (globalThis as any).window = originalWindow;
     });
 
     it('returns false when textarea is not found', () => {
@@ -43,7 +46,7 @@ describe('Client Bridge', () => {
       expect(injectIntoChatTextarea('some text')).toBe(false);
     });
 
-    it('injects text into textarea and dispatches input event', () => {
+    it('injects text into textarea and dispatches input and change events', () => {
       const dispatchedEvents: any[] = [];
       let focused = false;
       const fakeTextarea = {
@@ -68,9 +71,39 @@ describe('Client Bridge', () => {
       expect(res).toBe(true);
       expect(fakeTextarea.value).toBe('Existing text\nAppended text');
       expect(focused).toBe(true);
-      expect(dispatchedEvents.length).toBe(1);
+      expect(dispatchedEvents.length).toBe(2);
       expect(dispatchedEvents[0].type).toBe('input');
       expect(dispatchedEvents[0].bubbles).toBe(true);
+      expect(dispatchedEvents[1].type).toBe('change');
+      expect(dispatchedEvents[1].bubbles).toBe(true);
+    });
+
+    it('uses HTMLTextAreaElement.prototype setter when present', () => {
+      let setterCalledWith = '';
+      const fakeProto = {
+        set value(val: string) {
+          setterCalledWith = val;
+        },
+        get value() {
+          return setterCalledWith;
+        },
+      };
+      (globalThis as any).window = {
+        HTMLTextAreaElement: {
+          prototype: fakeProto,
+        },
+      };
+      const fakeTextarea = Object.create(fakeProto);
+      fakeTextarea.dispatchEvent = vi.fn();
+      fakeTextarea.focus = vi.fn();
+
+      (globalThis as any).document = {
+        querySelector: vi.fn().mockReturnValue(fakeTextarea),
+      };
+
+      injectIntoChatTextarea('controlled text');
+      expect(setterCalledWith).toBe('controlled text');
+      expect(fakeTextarea.dispatchEvent).toHaveBeenCalledTimes(2);
     });
 
     it('injects text into empty textarea without leading newline', () => {
@@ -123,6 +156,132 @@ describe('Client Bridge', () => {
       const ctx = { get: vi.fn().mockReturnValue(undefined) };
 
       expect(() => plugin.apply(ctx)).not.toThrow();
+    });
+
+    it('renders toolbar navigation buttons (Back, Forward, Reload) and wires click handlers', () => {
+      let registeredComponent: any;
+      const mockSlots = {
+        inject: vi.fn((_name, cb) => cb()),
+        register: vi.fn((_config, comp) => { registeredComponent = comp; }),
+      };
+      const host = { call: vi.fn().mockResolvedValue({ port: 9223 }) };
+      const plugin = createClientPlugin(host);
+      plugin.apply({ get: vi.fn().mockReturnValue(mockSlots) });
+
+      const backMock = vi.fn();
+      const forwardMock = vi.fn();
+      const reloadMock = vi.fn();
+
+      const mockIframeWindow = {
+        history: { back: backMock, forward: forwardMock },
+        location: { reload: reloadMock },
+      };
+      const mockIframeRef = { current: { contentWindow: mockIframeWindow } };
+
+      const originalReact = (globalThis as any).React;
+      const createdElements: any[] = [];
+      (globalThis as any).React = {
+        useState: vi.fn((init) => [init, vi.fn()]),
+        useRef: vi.fn(() => mockIframeRef),
+        useEffect: vi.fn(),
+        createElement: vi.fn((type, props, ...children) => {
+          const el = { type, props, children };
+          createdElements.push(el);
+          return el;
+        }),
+      };
+
+      try {
+        const root = registeredComponent();
+        expect(root).toBeDefined();
+
+        // Find toolbar buttons by children text
+        const backBtn = createdElements.find((el) => el.type === 'button' && el.children?.[0] === 'Back');
+        const forwardBtn = createdElements.find((el) => el.type === 'button' && el.children?.[0] === 'Forward');
+        const reloadBtn = createdElements.find((el) => el.type === 'button' && el.children?.[0] === 'Reload');
+
+        expect(backBtn).toBeDefined();
+        expect(forwardBtn).toBeDefined();
+        expect(reloadBtn).toBeDefined();
+
+        backBtn.props.onClick();
+        expect(backMock).toHaveBeenCalled();
+
+        forwardBtn.props.onClick();
+        expect(forwardMock).toHaveBeenCalled();
+
+        reloadBtn.props.onClick();
+        expect(reloadMock).toHaveBeenCalled();
+      } finally {
+        (globalThis as any).React = originalReact;
+      }
+    });
+
+    it('syncs URL via host.call and handles navigation', async () => {
+      let registeredComponent: any;
+      const mockSlots = {
+        inject: vi.fn((_name, cb) => cb()),
+        register: vi.fn((_config, comp) => { registeredComponent = comp; }),
+      };
+      const hostCalls: any[] = [];
+      const host = {
+        call: vi.fn((method, args) => {
+          hostCalls.push({ method, args });
+          if (method === 'realbrowser-get-proxy') return Promise.resolve({ port: 9223 });
+          if (method === 'realbrowser-get-current-url') return Promise.resolve({ url: 'https://new-url.com' });
+          if (method === 'realbrowser-navigate') return Promise.resolve({ ok: true });
+          return Promise.resolve();
+        }),
+      };
+      const plugin = createClientPlugin(host);
+      plugin.apply({ get: vi.fn().mockReturnValue(mockSlots) });
+
+      let effectCallback: any;
+      const setUrlMock = vi.fn();
+      const setInputUrlMock = vi.fn();
+      const mockIframeRef = { current: null };
+
+      const originalReact = (globalThis as any).React;
+      const originalWindow = (globalThis as any).window;
+      (globalThis as any).window = {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      };
+
+      const createdElements: any[] = [];
+      (globalThis as any).React = {
+        useState: vi.fn((init) => {
+          if (init === 'https://example.com') return [init, setUrlMock];
+          return [init, vi.fn()];
+        }),
+        useRef: vi.fn(() => mockIframeRef),
+        useEffect: vi.fn((cb) => { effectCallback = cb; }),
+        createElement: vi.fn((type, props, ...children) => {
+          const el = { type, props, children };
+          createdElements.push(el);
+          return el;
+        }),
+      };
+
+      try {
+        registeredComponent();
+        expect(effectCallback).toBeDefined();
+
+        // Run effect
+        const cleanup = effectCallback();
+        expect(host.call).toHaveBeenCalledWith('realbrowser-get-current-url');
+
+        // Verify Go button calls host realbrowser-navigate
+        const goBtn = createdElements.find((el) => el.type === 'button' && el.children?.[0] === 'Go');
+        expect(goBtn).toBeDefined();
+        goBtn.props.onClick();
+        expect(host.call).toHaveBeenCalledWith('realbrowser-navigate', { url: expect.any(String) });
+
+        cleanup();
+      } finally {
+        (globalThis as any).React = originalReact;
+        (globalThis as any).window = originalWindow;
+      }
     });
 
     it('handles message events with iframe source validation and clipboard fallback', () => {

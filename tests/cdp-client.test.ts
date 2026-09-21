@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocketServer } from 'ws';
 import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { formatCDPMessage, CDPClient } from '../src/cdp/cdp-client.js';
 import { ChromeController } from '../src/cdp/chrome-controller.js';
@@ -206,7 +209,47 @@ describe('ChromeController', () => {
     expect(data).toBe('screenshot_base64_data');
   });
 
-  it('close closes CDP and kills proc if present', () => {
+  it('gets full dom when selector is not provided', async () => {
+    let evaluatedExpression = '';
+    const spyCdp = {
+      send: async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'Runtime.evaluate') {
+          evaluatedExpression = params?.expression as string;
+          return { result: { value: '<html><body>Hello</body></html>' } };
+        }
+        return {};
+      },
+      close: () => {},
+      connect: async () => {},
+    } as unknown as CDPClient;
+
+    const controller = new ChromeController(spyCdp);
+    const html = await controller.getDom();
+    expect(evaluatedExpression).toContain('document.documentElement.outerHTML');
+    expect(html).toBe('<html><body>Hello</body></html>');
+  });
+
+  it('gets selector outerHTML when selector is provided', async () => {
+    let evaluatedExpression = '';
+    const spyCdp = {
+      send: async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'Runtime.evaluate') {
+          evaluatedExpression = params?.expression as string;
+          return { result: { value: '<div id="main">Content</div>' } };
+        }
+        return {};
+      },
+      close: () => {},
+      connect: async () => {},
+    } as unknown as CDPClient;
+
+    const controller = new ChromeController(spyCdp);
+    const html = await controller.getDom('#main');
+    expect(evaluatedExpression).toContain('document.querySelector("#main")');
+    expect(html).toBe('<div id="main">Content</div>');
+  });
+
+  it('close closes CDP, kills proc, and cleans up userDataDir', () => {
     let closed = false;
     let killed = false;
     const fakeCdp = {
@@ -217,11 +260,17 @@ describe('ChromeController', () => {
     (controller as any).proc = {
       kill: () => { killed = true; },
     };
+    const testDir = path.join(os.tmpdir(), 'test-chrome-profile-' + Math.random());
+    fs.mkdirSync(testDir, { recursive: true });
+    (controller as any).userDataDir = testDir;
 
+    expect(fs.existsSync(testDir)).toBe(true);
     controller.close();
     expect(closed).toBe(true);
     expect(killed).toBe(true);
     expect((controller as any).proc).toBeNull();
+    expect((controller as any).userDataDir).toBeNull();
+    expect(fs.existsSync(testDir)).toBe(false);
   });
 
   it('ensureLaunched returns immediately if proc exists', async () => {

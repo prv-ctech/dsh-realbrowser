@@ -11,6 +11,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
   let proxyInstance: { port: number; close: () => void } | null = null;
   const chrome = options?.chrome || new ChromeController();
   const startProxy = options?.startProxy || startProxyServer;
+  let currentUrl = 'https://example.com';
 
   const ensureChrome = async () => {
     if (typeof chrome.ensureLaunched === 'function') {
@@ -28,9 +29,14 @@ export function createHostPlugin(options?: HostPluginOptions) {
           return { port: proxyInstance?.port };
         });
 
+        harness.handle('realbrowser-get-current-url', async () => {
+          return { url: currentUrl };
+        });
+
         harness.handle('realbrowser-navigate', async (args: { url: string }) => {
           await ensureChrome();
           await chrome.navigate(args.url);
+          currentUrl = args.url;
           return { ok: true };
         });
 
@@ -46,7 +52,36 @@ export function createHostPlugin(options?: HostPluginOptions) {
             execute: async ({ url }: { url: string }) => {
               await ensureChrome();
               await chrome.navigate(url);
+              currentUrl = url;
               return `Navigated to ${url}`;
+            },
+          });
+
+          harness.registerTool({
+            name: 'realbrowser_screenshot',
+            description: 'Take a screenshot of the current page in RealBrowser (returns base64 PNG)',
+            parameters: {
+              type: 'object',
+              properties: {},
+            },
+            execute: async () => {
+              await ensureChrome();
+              return await chrome.screenshot();
+            },
+          });
+
+          harness.registerTool({
+            name: 'realbrowser_get_dom',
+            description: 'Get outer HTML of page or element matching selector in RealBrowser',
+            parameters: {
+              type: 'object',
+              properties: {
+                selector: { type: 'string' },
+              },
+            },
+            execute: async ({ selector }: { selector?: string } = {}) => {
+              await ensureChrome();
+              return await chrome.getDom(selector);
             },
           });
 

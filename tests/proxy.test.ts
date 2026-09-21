@@ -58,6 +58,11 @@ describe('Proxy Server', () => {
           'cross-origin-opener-policy': 'same-origin',
         });
         res.end('<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello</h1></body></html>');
+      } else if (url.pathname === '/html-case-insensitive') {
+        res.writeHead(200, {
+          'content-type': 'text/html',
+        });
+        res.end('<HTML><HEAD><TITLE>Case</TITLE></HEAD><BODY><P>Content</P></BODY></HTML>');
       } else if (url.pathname === '/html-no-body-tag') {
         res.writeHead(200, {
           'content-type': 'text/html',
@@ -127,8 +132,19 @@ describe('Proxy Server', () => {
     expect(res.headers.get('content-security-policy')).toContain("script-src 'self'");
 
     const body = await res.text();
+    expect(body).toContain(`<base href="http://127.0.0.1:${upstreamPort}/html">`);
     expect(body).toContain('<script src="/__realbrowser/picker.js"></script></body>');
     expect(body).toContain('<h1>Hello</h1>');
+  });
+
+  it('injects <base> and picker script with case-insensitive tags', async () => {
+    const targetUrl = `http://127.0.0.1:${upstreamPort}/html-case-insensitive`;
+    const res = await fetch(`http://127.0.0.1:${proxy.port}/?url=${encodeURIComponent(targetUrl)}`);
+
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain(`<HEAD><base href="http://127.0.0.1:${upstreamPort}/html-case-insensitive">`);
+    expect(body).toContain('<script src="/__realbrowser/picker.js"></script></body>');
   });
 
   it('proxies HTML content and appends picker script if no </body> tag', async () => {
@@ -137,6 +153,7 @@ describe('Proxy Server', () => {
 
     expect(res.status).toBe(200);
     const body = await res.text();
+    expect(body).toContain(`<base href="http://127.0.0.1:${upstreamPort}/html-no-body-tag">`);
     expect(body).toContain('<div>No body closing tag</div><script src="/__realbrowser/picker.js"></script>');
   });
 

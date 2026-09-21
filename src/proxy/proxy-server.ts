@@ -63,8 +63,18 @@ export function startProxyServer(port = 0): Promise<{ port: number; close: () =>
           });
           proxyRes.on('end', () => {
             const injection = '<script src="/__realbrowser/picker.js"></script>';
-            if (body.includes('</body>')) {
-              body = body.replace('</body>', `${injection}</body>`);
+            const baseTag = `<base href="${targetUrl.origin}${targetUrl.pathname}">`;
+
+            if (/<head[^>]*>/i.test(body)) {
+              body = body.replace(/<head[^>]*>/i, `$&${baseTag}`);
+            } else if (/<\/head>/i.test(body)) {
+              body = body.replace(/<\/head>/i, `${baseTag}</head>`);
+            } else {
+              body = baseTag + body;
+            }
+
+            if (/<\/body>/i.test(body)) {
+              body = body.replace(/<\/body>/i, `${injection}</body>`);
             } else {
               body += injection;
             }

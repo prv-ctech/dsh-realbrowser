@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { CDPClient } from './cdp-client.js';
 
@@ -10,6 +11,7 @@ export class ChromeController {
   public port: number;
   private executablePath?: string;
   private launchPromise: Promise<void> | null = null;
+  private userDataDir: string | null = null;
 
   constructor(cdp: CDPClient = new CDPClient(), port = 9222, executablePath?: string) {
     this.cdp = cdp;
@@ -56,9 +58,15 @@ export class ChromeController {
 
   async launch(headless = true): Promise<void> {
     const binary = this.resolveBinary();
+    if (!this.userDataDir) {
+      this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'realbrowser-chrome-'));
+    }
     const args = [
       `--remote-debugging-port=${this.port}`,
       headless ? '--headless=new' : '',
+      `--user-data-dir=${this.userDataDir}`,
+      '--disable-dev-shm-usage',
+      '--no-sandbox',
       '--no-first-run',
       '--no-default-browser-check',
       'about:blank',
@@ -73,6 +81,7 @@ export class ChromeController {
         if (!settled) {
           settled = true;
           this.proc = null;
+          this.cleanupUserDataDir();
           reject(err);
         }
       });
@@ -93,6 +102,7 @@ export class ChromeController {
               this.proc.kill();
               this.proc = null;
             }
+            this.cleanupUserDataDir();
             reject(err);
           }
         });
@@ -160,12 +170,36 @@ export class ChromeController {
     return res.data;
   }
 
+  async getDom(selector?: string): Promise<string> {
+    if (selector) {
+      const result = await this.evaluate<string>(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        return el ? el.outerHTML : '';
+      })()`);
+      return result || '';
+    }
+    const result = await this.evaluate<string>(`document.documentElement ? document.documentElement.outerHTML : ''`);
+    return result || '';
+  }
+
+  private cleanupUserDataDir(): void {
+    if (this.userDataDir) {
+      try {
+        fs.rmSync(this.userDataDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup error
+      }
+      this.userDataDir = null;
+    }
+  }
+
   close(): void {
     this.cdp.close();
     if (this.proc) {
       this.proc.kill();
       this.proc = null;
     }
+    this.cleanupUserDataDir();
     this.launchPromise = null;
   }
 }

@@ -26,6 +26,8 @@ describe('Host Plugin', () => {
       click: vi.fn().mockResolvedValue(undefined),
       type: vi.fn().mockResolvedValue(undefined),
       evaluate: vi.fn().mockResolvedValue({ title: 'Test Page' }),
+      screenshot: vi.fn().mockResolvedValue('base64_screenshot_data'),
+      getDom: vi.fn().mockResolvedValue('<html><body>Test DOM</body></html>'),
       close: vi.fn(),
     };
 
@@ -55,17 +57,26 @@ describe('Host Plugin', () => {
 
     // Verify RPC handles registered
     expect(handles.has('realbrowser-get-proxy')).toBe(true);
+    expect(handles.has('realbrowser-get-current-url')).toBe(true);
     expect(handles.has('realbrowser-navigate')).toBe(true);
 
     const proxyRes = await handles.get('realbrowser-get-proxy')!();
     expect(proxyRes).toEqual({ port: 8888 });
 
-    const navRes = await handles.get('realbrowser-navigate')!({ url: 'https://example.com' });
-    expect(mockChrome.navigate).toHaveBeenCalledWith('https://example.com');
+    const initialUrlRes = await handles.get('realbrowser-get-current-url')!();
+    expect(initialUrlRes).toEqual({ url: 'https://example.com' });
+
+    const navRes = await handles.get('realbrowser-navigate')!({ url: 'https://foo.com' });
+    expect(mockChrome.navigate).toHaveBeenCalledWith('https://foo.com');
     expect(navRes).toEqual({ ok: true });
+
+    const updatedUrlRes = await handles.get('realbrowser-get-current-url')!();
+    expect(updatedUrlRes).toEqual({ url: 'https://foo.com' });
 
     // Verify tools registered
     expect(tools.has('realbrowser_navigate')).toBe(true);
+    expect(tools.has('realbrowser_screenshot')).toBe(true);
+    expect(tools.has('realbrowser_get_dom')).toBe(true);
     expect(tools.has('realbrowser_click')).toBe(true);
     expect(tools.has('realbrowser_type')).toBe(true);
     expect(tools.has('realbrowser_evaluate')).toBe(true);
@@ -75,6 +86,19 @@ describe('Host Plugin', () => {
     const navResult = await navTool.execute({ url: 'https://example.com' });
     expect(mockChrome.navigate).toHaveBeenCalledWith('https://example.com');
     expect(navResult).toBe('Navigated to https://example.com');
+
+    const urlAfterTool = await handles.get('realbrowser-get-current-url')!();
+    expect(urlAfterTool).toEqual({ url: 'https://example.com' });
+
+    const screenshotTool = tools.get('realbrowser_screenshot')!;
+    const screenshotResult = await screenshotTool.execute();
+    expect(mockChrome.screenshot).toHaveBeenCalled();
+    expect(screenshotResult).toBe('base64_screenshot_data');
+
+    const domTool = tools.get('realbrowser_get_dom')!;
+    const domResult = await domTool.execute({ selector: '#app' });
+    expect(mockChrome.getDom).toHaveBeenCalledWith('#app');
+    expect(domResult).toBe('<html><body>Test DOM</body></html>');
 
     const clickTool = tools.get('realbrowser_click')!;
     const clickResult = await clickTool.execute({ selector: '#submit' });
@@ -154,6 +178,14 @@ describe('Host Plugin', () => {
         callOrder.push('evaluate');
         return 'test';
       }),
+      screenshot: vi.fn().mockImplementation(async () => {
+        callOrder.push('screenshot');
+        return 'data';
+      }),
+      getDom: vi.fn().mockImplementation(async () => {
+        callOrder.push('getDom');
+        return '<html></html>';
+      }),
       close: vi.fn(),
     };
 
@@ -184,6 +216,16 @@ describe('Host Plugin', () => {
     callOrder.length = 0;
     await tools.get('realbrowser_evaluate').execute({ expression: '1+1' });
     expect(callOrder).toEqual(['ensureLaunched', 'evaluate']);
+
+    // Test realbrowser_screenshot
+    callOrder.length = 0;
+    await tools.get('realbrowser_screenshot').execute();
+    expect(callOrder).toEqual(['ensureLaunched', 'screenshot']);
+
+    // Test realbrowser_get_dom
+    callOrder.length = 0;
+    await tools.get('realbrowser_get_dom').execute({ selector: '#test' });
+    expect(callOrder).toEqual(['ensureLaunched', 'getDom']);
   });
 });
 
