@@ -363,6 +363,14 @@ describe('ChromeController', () => {
     server.close();
   });
 
+  it('resets a Chrome-assigned port before relaunch', async () => {
+    const controller = new ChromeController(mockCdp, 0, 'nonexistent-chrome-binary-test-xyz');
+    controller.port = 54321;
+
+    await expect(controller.launch()).rejects.toThrow();
+    expect(controller.port).toBe(0);
+  });
+
   it('waitForDebugger times out if port is unreachable', async () => {
     // Port 1 is not open
     const controller = new ChromeController(mockCdp, 1);

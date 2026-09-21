@@ -190,6 +190,7 @@ export class ChromeController {
   private proc: ChildProcess | null = null;
   private cdp: CDPClient;
   public port: number;
+  private readonly autoAssignPort: boolean;
   private executablePath?: string;
   private launchPromise: Promise<void> | null = null;
   private userDataDir: string | null = null;
@@ -210,6 +211,7 @@ export class ChromeController {
   constructor(cdp: CDPClient = new CDPClient(), port = 0, executablePath?: string) {
     this.cdp = cdp;
     this.port = port;
+    this.autoAssignPort = port === 0;
     this.executablePath = executablePath;
     const on = (cdp as any).on?.bind(cdp);
     if (on) {
@@ -452,6 +454,7 @@ export class ChromeController {
   }
 
   async launch(headless = true): Promise<void> {
+    if (this.autoAssignPort) this.port = 0;
     const binary = this.resolveBinary();
     if (!this.userDataDir) {
       this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'realbrowser-chrome-'));
