@@ -133,6 +133,78 @@ describe('Host Plugin', () => {
     expect(mockChrome.close).toHaveBeenCalled();
   });
 
+  it('exposes browser RPC controls and raw frame route', async () => {
+    const handles = new Map<string, Function>();
+    const routes = new Map<string, any>();
+    const snapshot = {
+      url: 'https://current.test', title: 'Current', loading: false,
+      canGoBack: true, canGoForward: false,
+    };
+    const mockChrome = {
+      ensureLaunched: vi.fn().mockResolvedValue(undefined),
+      getSnapshot: vi.fn(() => snapshot),
+      navigate: vi.fn().mockResolvedValue(undefined),
+      goBack: vi.fn().mockResolvedValue(undefined),
+      goForward: vi.fn().mockResolvedValue(undefined),
+      reload: vi.fn().mockResolvedValue(undefined),
+      setViewport: vi.fn().mockResolvedValue(undefined),
+      dispatchInput: vi.fn().mockResolvedValue(undefined),
+      startScreencast: vi.fn().mockResolvedValue(undefined),
+      stopScreencast: vi.fn().mockResolvedValue(undefined),
+      latestFrameAfter: vi.fn((after: number) => after < 4
+        ? { sequence: 4, data: Buffer.from('jpeg-bytes'), mediaType: 'image/jpeg' }
+        : null),
+      close: vi.fn(),
+    };
+    const plugin = createHostPlugin({
+      harness: { handle: (name: string, fn: Function) => handles.set(name, fn) },
+      chrome: mockChrome,
+      startProxy: vi.fn().mockResolvedValue({ port: 8888, close: vi.fn() }),
+    });
+    await plugin.apply({
+      webServer: { register: (route: any) => (routes.set(route.path, route), () => routes.delete(route.path)) },
+      effect: (factory: Function) => factory(),
+    });
+
+    expect(await handles.get('realbrowser-get-state')!()).toEqual(snapshot);
+    await handles.get('realbrowser-navigate')!({ url: 'https://next.test' });
+    await handles.get('realbrowser-command')!({ command: 'back' });
+    await handles.get('realbrowser-command')!({ command: 'forward' });
+    await handles.get('realbrowser-command')!({ command: 'reload' });
+    await expect(handles.get('realbrowser-command')!({ command: 'stop' })).rejects.toThrow('Invalid browser command');
+    await handles.get('realbrowser-set-viewport')!({ id: 'desktop-4k' });
+    await handles.get('realbrowser-set-viewport')!({ id: 'responsive', width: 901.8, height: 612.2 });
+    await handles.get('realbrowser-input')!({ kind: 'text', text: 'hello' });
+    await handles.get('realbrowser-start-stream')!({ maxWidth: 1200, maxHeight: 800 });
+    await handles.get('realbrowser-stop-stream')!();
+
+    expect(mockChrome.navigate).toHaveBeenCalledWith('https://next.test');
+    expect(mockChrome.goBack).toHaveBeenCalledOnce();
+    expect(mockChrome.goForward).toHaveBeenCalledOnce();
+    expect(mockChrome.reload).toHaveBeenCalledOnce();
+    expect(mockChrome.setViewport).toHaveBeenNthCalledWith(1, expect.objectContaining({ width: 3840, height: 2160 }));
+    expect(mockChrome.setViewport).toHaveBeenNthCalledWith(2, { width: 902, height: 612, deviceScaleFactor: 1, mobile: false });
+    expect(mockChrome.dispatchInput).toHaveBeenCalledWith({ kind: 'text', text: 'hello' });
+    expect(mockChrome.startScreencast).toHaveBeenCalledWith(1200, 800);
+    expect(mockChrome.stopScreencast).toHaveBeenCalledOnce();
+
+    const route = routes.get('/realbrowser/frame');
+    expect(route).toBeDefined();
+    const headers = new Map<string, string>();
+    const response: any = {
+      statusCode: 0,
+      body: undefined,
+      setHeader: (name: string, value: string) => headers.set(name.toLowerCase(), value),
+      end(value?: unknown) { this.body = value; },
+    };
+    await route.handler({ method: 'GET', url: '/realbrowser/frame?after=0' }, response);
+    expect(response.statusCode).toBe(200);
+    expect(headers.get('content-type')).toBe('image/jpeg');
+    expect(headers.get('x-realbrowser-sequence')).toBe('4');
+    expect(headers.get('cache-control')).toBe('no-store');
+    expect(response.body).toEqual(Buffer.from('jpeg-bytes'));
+  });
+
   it('uses globalThis.harness when options.harness is not provided', async () => {
     const handles = new Map<string, Function>();
     (globalThis as any).harness = {

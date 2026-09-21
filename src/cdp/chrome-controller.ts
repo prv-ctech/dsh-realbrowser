@@ -144,6 +144,10 @@ export class ChromeController {
   };
   private snapshotListeners = new Set<(snapshot: BrowserSnapshot) => void>();
   private cdpDisposers: Array<() => void> = [];
+  private screencastActive = false;
+  private screencastDisposer: (() => void) | null = null;
+  private frameSequence = 0;
+  private latestFrame: { sequence: number; data: Buffer; mediaType: 'image/jpeg' } | null = null;
 
   constructor(cdp: CDPClient = new CDPClient(), port = 9222, executablePath?: string) {
     this.cdp = cdp;
@@ -265,6 +269,49 @@ export class ChromeController {
     } else {
       await this.cdp.send('Input.insertText', { text: input.text });
     }
+  }
+
+  async startScreencast(maxWidth: number, maxHeight: number): Promise<void> {
+    if (this.screencastActive) await this.stopScreencast();
+    this.screencastDisposer = this.cdp.on('Page.screencastFrame', (params: any) => {
+      if (!this.screencastActive || typeof params?.data !== 'string') return;
+      this.latestFrame = {
+        sequence: ++this.frameSequence,
+        data: Buffer.from(params.data, 'base64'),
+        mediaType: 'image/jpeg',
+      };
+      void this.cdp.send('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
+    });
+    this.screencastActive = true;
+    try {
+      await this.cdp.send('Page.startScreencast', {
+        format: 'jpeg',
+        quality: 80,
+        maxWidth: Math.max(1, Math.round(maxWidth)),
+        maxHeight: Math.max(1, Math.round(maxHeight)),
+        everyNthFrame: 1,
+      });
+    } catch (error) {
+      this.clearScreencastLocal();
+      throw error;
+    }
+  }
+
+  async stopScreencast(): Promise<void> {
+    if (!this.screencastActive) return;
+    this.clearScreencastLocal();
+    await this.cdp.send('Page.stopScreencast');
+  }
+
+  latestFrameAfter(sequence: number): { sequence: number; data: Buffer; mediaType: 'image/jpeg' } | null {
+    return this.latestFrame && this.latestFrame.sequence > sequence ? this.latestFrame : null;
+  }
+
+  private clearScreencastLocal(): void {
+    this.screencastActive = false;
+    this.screencastDisposer?.();
+    this.screencastDisposer = null;
+    this.latestFrame = null;
   }
 
   async ensureLaunched(headless = true): Promise<void> {
@@ -416,6 +463,7 @@ export class ChromeController {
   }
 
   close(): void {
+    this.clearScreencastLocal();
     for (const dispose of this.cdpDisposers.splice(0)) dispose();
     this.snapshotListeners.clear();
     this.cdp.close();

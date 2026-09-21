@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { startProxyServer } from '../proxy/proxy-server.js';
 import { ChromeController } from '../cdp/chrome-controller.js';
+import { resolveViewportMetrics } from '../browser/viewports.js';
+import type { BrowserInput } from '../browser/protocol.js';
 
 /**
  * Build the `output` declaration every DSH tool must carry:
@@ -26,11 +28,58 @@ export interface HostPluginOptions {
   startProxy?: (port?: number) => Promise<{ port: number; close: () => void }>;
 }
 
+function finiteNumber(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${name} must be finite`);
+  return value;
+}
+
+function parseBrowserInput(value: any): BrowserInput {
+  if (!value || typeof value !== 'object') throw new Error('Invalid browser input');
+  if (value.kind === 'text' && typeof value.text === 'string') return { kind: 'text', text: value.text };
+  if (value.kind === 'wheel') {
+    return {
+      kind: 'wheel',
+      x: finiteNumber(value.x, 'x'),
+      y: finiteNumber(value.y, 'y'),
+      deltaX: finiteNumber(value.deltaX, 'deltaX'),
+      deltaY: finiteNumber(value.deltaY, 'deltaY'),
+    };
+  }
+  if (value.kind === 'mouse' && ['mouseMoved', 'mousePressed', 'mouseReleased'].includes(value.type)) {
+    if (value.button !== undefined && !['left', 'middle', 'right'].includes(value.button)) {
+      throw new Error('Invalid mouse button');
+    }
+    if (value.clickCount !== undefined && (!Number.isInteger(value.clickCount) || value.clickCount < 0)) {
+      throw new Error('Invalid click count');
+    }
+    return {
+      kind: 'mouse',
+      type: value.type,
+      x: finiteNumber(value.x, 'x'),
+      y: finiteNumber(value.y, 'y'),
+      ...(value.button === undefined ? {} : { button: value.button }),
+      ...(value.clickCount === undefined ? {} : { clickCount: value.clickCount }),
+    };
+  }
+  if (value.kind === 'key' && ['keyDown', 'keyUp'].includes(value.type) &&
+      typeof value.key === 'string' && typeof value.code === 'string' && Number.isInteger(value.modifiers)) {
+    return { kind: 'key', type: value.type, key: value.key, code: value.code, modifiers: value.modifiers };
+  }
+  throw new Error('Invalid browser input');
+}
+
 export function createHostPlugin(options?: HostPluginOptions) {
   let proxyInstance: { port: number; close: () => void } | null = null;
   const chrome = options?.chrome || new ChromeController();
   const startProxy = options?.startProxy || startProxyServer;
   let currentUrl = 'https://example.com';
+  const getState = () => chrome.getSnapshot?.() ?? {
+    url: currentUrl,
+    title: '',
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+  };
 
   const ensureChrome = async () => {
     if (typeof chrome.ensureLaunched === 'function') {
@@ -70,7 +119,7 @@ export function createHostPlugin(options?: HostPluginOptions) {
                 res.end(JSON.stringify({ port: proxyInstance?.port }));
               } else if (method === 'get-current-url') {
                 res.statusCode = 200;
-                res.end(JSON.stringify({ url: currentUrl }));
+                res.end(JSON.stringify({ url: getState().url }));
               } else if (method === 'navigate') {
                 await ensureChrome();
                 await chrome.navigate(payload.url);
@@ -87,6 +136,47 @@ export function createHostPlugin(options?: HostPluginOptions) {
             }
           },
         }), 'realbrowser: /realbrowser/api routes');
+        ctx.effect?.(() => ctx.webServer.register({
+          kind: 'prefix',
+          path: '/realbrowser/frame',
+          handler: async (req: any, res: any) => {
+            res.setHeader('cache-control', 'no-store');
+            if (req.method !== 'GET') {
+              res.statusCode = 405;
+              res.setHeader('allow', 'GET');
+              res.end();
+              return;
+            }
+            const url = new URL(req.url ?? '/realbrowser/frame', 'http://dsh.internal');
+            if (url.pathname !== '/realbrowser/frame') {
+              res.statusCode = 404;
+              res.end();
+              return;
+            }
+            const rawAfter = url.searchParams.get('after') ?? '0';
+            if (!/^\d+$/.test(rawAfter)) {
+              res.statusCode = 400;
+              res.end();
+              return;
+            }
+            const after = Number(rawAfter);
+            if (!Number.isSafeInteger(after)) {
+              res.statusCode = 400;
+              res.end();
+              return;
+            }
+            const frame = chrome.latestFrameAfter(after);
+            if (!frame) {
+              res.statusCode = 204;
+              res.end();
+              return;
+            }
+            res.statusCode = 200;
+            res.setHeader('content-type', frame.mediaType);
+            res.setHeader('x-realbrowser-sequence', String(frame.sequence));
+            res.end(frame.data);
+          },
+        }), 'realbrowser: frame route');
       }
 
       // Tools definition. Every row must declare `output`: the DSH tools
@@ -225,13 +315,60 @@ export function createHostPlugin(options?: HostPluginOptions) {
         });
 
         harness.handle?.('realbrowser-get-current-url', async () => {
-          return { url: currentUrl };
+          return { url: getState().url };
         });
 
+        harness.handle?.('realbrowser-get-state', async () => getState());
+
         harness.handle?.('realbrowser-navigate', async (args: { url: string }) => {
+          if (!args || typeof args.url !== 'string' || !args.url) throw new Error('Invalid URL');
           await ensureChrome();
           await chrome.navigate(args.url);
           currentUrl = args.url;
+          return { ok: true };
+        });
+
+        harness.handle?.('realbrowser-command', async (args: { command: string }) => {
+          if (!args || !['back', 'forward', 'reload'].includes(args.command)) {
+            throw new Error('Invalid browser command');
+          }
+          await ensureChrome();
+          if (args.command === 'back') await chrome.goBack();
+          else if (args.command === 'forward') await chrome.goForward();
+          else await chrome.reload();
+          return { ok: true };
+        });
+
+        harness.handle?.('realbrowser-set-viewport', async (args: { id: string; width?: number; height?: number }) => {
+          if (!args || typeof args.id !== 'string') throw new Error('Invalid viewport');
+          const responsiveSize = args.id === 'responsive'
+            ? { width: finiteNumber(args.width, 'width'), height: finiteNumber(args.height, 'height') }
+            : { width: 1, height: 1 };
+          const metrics = resolveViewportMetrics(args.id, responsiveSize);
+          await ensureChrome();
+          await chrome.setViewport(metrics);
+          return metrics;
+        });
+
+        harness.handle?.('realbrowser-input', async (args: BrowserInput) => {
+          const input = parseBrowserInput(args);
+          await ensureChrome();
+          await chrome.dispatchInput(input);
+          return { ok: true };
+        });
+
+        harness.handle?.('realbrowser-start-stream', async (args: { maxWidth: number; maxHeight: number }) => {
+          const maxWidth = finiteNumber(args?.maxWidth, 'maxWidth');
+          const maxHeight = finiteNumber(args?.maxHeight, 'maxHeight');
+          if (maxWidth <= 0 || maxHeight <= 0) throw new Error('Stream dimensions must be positive');
+          await ensureChrome();
+          await chrome.startScreencast(maxWidth, maxHeight);
+          return { ok: true };
+        });
+
+        harness.handle?.('realbrowser-stop-stream', async () => {
+          await ensureChrome();
+          await chrome.stopScreencast();
           return { ok: true };
         });
 
