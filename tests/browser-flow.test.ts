@@ -1,5 +1,4 @@
 import http from 'node:http';
-import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ChromeController, resolveChromeBinary } from '../src/cdp/chrome-controller.js';
 
@@ -8,14 +7,7 @@ async function listen(server: http.Server): Promise<number> {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());
   });
-  return (server.address() as net.AddressInfo).port;
-}
-
-async function unusedPort(): Promise<number> {
-  const server = net.createServer();
-  const port = await listen(server as any);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
+  return (server.address() as { port: number }).port;
 }
 
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean): Promise<T> {
@@ -68,7 +60,7 @@ describe('real browser flow', () => {
       else { response.statusCode = 404; response.end('missing'); }
     });
     const fixturePort = await listen(fixture);
-    controller = new ChromeController(undefined, await unusedPort(), binary);
+    controller = new ChromeController(undefined, 0, binary);
     await controller.ensureLaunched(true);
 
     await controller.navigate(`http://127.0.0.1:${fixturePort}/`);

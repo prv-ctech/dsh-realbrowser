@@ -1,22 +1,14 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import net from 'node:net';
 import { ChromeController, resolveChromeBinary } from '../src/cdp/chrome-controller.js';
 import { resolveViewportMetrics } from '../src/browser/viewports.js';
 
-async function listen(server: http.Server | net.Server): Promise<number> {
+async function listen(server: http.Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());
   });
-  return (server.address() as net.AddressInfo).port;
-}
-
-async function unusedPort(): Promise<number> {
-  const server = net.createServer();
-  const port = await listen(server);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
+  return (server.address() as { port: number }).port;
 }
 
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean): Promise<T> {
@@ -52,7 +44,7 @@ async function main() {
   let controller: ChromeController | undefined;
   try {
     const fixturePort = await listen(server);
-    controller = new ChromeController(undefined, await unusedPort(), resolveChromeBinary());
+    controller = new ChromeController(undefined, 0, resolveChromeBinary());
     await controller.ensureLaunched(true);
     console.log('✔ Chrome launch');
 
