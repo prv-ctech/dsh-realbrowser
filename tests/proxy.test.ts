@@ -63,6 +63,11 @@ describe('Proxy Server', () => {
           'content-type': 'text/html',
         });
         res.end('<div>No body closing tag</div>');
+      } else if (url.pathname === '/echo-headers') {
+        res.writeHead(200, {
+          'content-type': 'application/json',
+        });
+        res.end(JSON.stringify(req.headers));
       } else if (url.pathname === '/json') {
         res.writeHead(200, {
           'content-type': 'application/json',
@@ -153,6 +158,17 @@ describe('Proxy Server', () => {
     expect(res.status).toBe(502);
     const body = await res.text();
     expect(body).toContain('RealBrowser Proxy Error');
+  });
+
+  it('strips accept-encoding from forwarded request headers', async () => {
+    const targetUrl = `http://127.0.0.1:${upstreamPort}/echo-headers`;
+    const res = await fetch(`http://127.0.0.1:${proxy.port}/?url=${encodeURIComponent(targetUrl)}`, {
+      headers: { 'accept-encoding': 'gzip, deflate, br' },
+    });
+
+    expect(res.status).toBe(200);
+    const headers = await res.json();
+    expect(headers['accept-encoding']).toBeUndefined();
   });
 });
 

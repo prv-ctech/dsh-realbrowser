@@ -34,14 +34,14 @@ export function startProxyServer(port = 0): Promise<{ port: number; close: () =>
       }
 
       const client = targetUrl.protocol === 'https:' ? https : http;
+      const proxyHeaders = { ...req.headers, host: targetUrl.host };
+      delete proxyHeaders['accept-encoding'];
+
       const proxyReq = client.request(
         targetUrl,
         {
           method: req.method,
-          headers: {
-            ...req.headers,
-            host: targetUrl.host,
-          },
+          headers: proxyHeaders,
         },
         (proxyRes) => {
           const headers = filterResponseHeaders(proxyRes.headers);
@@ -74,8 +74,12 @@ export function startProxyServer(port = 0): Promise<{ port: number; close: () =>
       );
 
       proxyReq.on('error', (err) => {
-        res.writeHead(502, { 'Content-Type': 'text/html' });
-        res.end(`<h3>RealBrowser Proxy Error</h3><p>${err.message}</p>`);
+        if (!res.headersSent) {
+          res.writeHead(502, { 'Content-Type': 'text/html' });
+          res.end(`<h3>RealBrowser Proxy Error</h3><p>${err.message}</p>`);
+        } else {
+          res.destroy();
+        }
       });
 
       req.pipe(proxyReq);
