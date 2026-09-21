@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify version tag
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "Tag v$tag does not match package version $version" >&2
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build
+
+      - name: Pack release
+        id: pack
+        shell: bash
+        run: |
+          tarball="$(npm pack --silent)"
+          test -f "$tarball"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          "${{ steps.pack.outputs.tarball }}"
+          --verify-tag
+          --generate-notes
+          --title "RealBrowser $GITHUB_REF_NAME"

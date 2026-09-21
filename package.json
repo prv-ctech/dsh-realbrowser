@@ -11,6 +11,11 @@
     "url": "https://github.com/prv-ctech/dsh-realbrowser/issues"
   },
   "type": "module",
+  "files": [
+    "dist/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
