@@ -15,6 +15,16 @@ describe('Client Bridge', () => {
     expect(formatted).toBe('Element selected: `#submit-btn` (<button>: "Submit Order")');
   });
 
+  it('formats picked element markdown context with xpath', () => {
+    const formatted = formatPickedElementMessage({
+      selector: '#submit-btn',
+      tag: 'button',
+      text: 'Submit Order',
+      xpath: '//*[@id="submit-btn"]',
+    });
+    expect(formatted).toBe('Element selected: `#submit-btn` [XPath: `//*[@id="submit-btn"]`] (<button>: "Submit Order")');
+  });
+
   describe('injectIntoChatTextarea', () => {
     let originalDocument: any;
 
@@ -113,6 +123,89 @@ describe('Client Bridge', () => {
       const ctx = { get: vi.fn().mockReturnValue(undefined) };
 
       expect(() => plugin.apply(ctx)).not.toThrow();
+    });
+
+    it('handles message events with iframe source validation and clipboard fallback', () => {
+      let registeredComponent: any;
+      const mockSlots = {
+        inject: vi.fn((_name, cb) => cb()),
+        register: vi.fn((_config, comp) => { registeredComponent = comp; }),
+      };
+      const host = { call: vi.fn().mockResolvedValue({ port: 9223 }) };
+      const plugin = createClientPlugin(host);
+      plugin.apply({ get: vi.fn().mockReturnValue(mockSlots) });
+
+      let effectCallback: any;
+      const mockIframeWindow = {};
+      const mockIframeRef = { current: { contentWindow: mockIframeWindow } };
+
+      const originalReact = (globalThis as any).React;
+      const originalWindow = (globalThis as any).window;
+      const originalDocument = (globalThis as any).document;
+
+      const listeners: Record<string, Function> = {};
+      (globalThis as any).window = {
+        addEventListener: vi.fn((evt, cb) => { listeners[evt] = cb; }),
+        removeEventListener: vi.fn((evt, _cb) => { delete listeners[evt]; }),
+      };
+
+      const writeTextMock = vi.fn();
+      const originalNavigatorDesc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { clipboard: { writeText: writeTextMock } },
+        configurable: true,
+        writable: true,
+      });
+
+      (globalThis as any).React = {
+        useState: vi.fn((init) => [init, vi.fn()]),
+        useRef: vi.fn(() => mockIframeRef),
+        useEffect: vi.fn((cb) => { effectCallback = cb; }),
+        createElement: vi.fn(),
+      };
+
+      try {
+        registeredComponent();
+        expect(effectCallback).toBeDefined();
+        const cleanup = effectCallback();
+        expect(listeners['message']).toBeDefined();
+
+        // 1. Message from wrong source should be ignored
+        listeners['message']({
+          source: {},
+          data: {
+            type: 'REALBROWSER_ELEMENT_PICKED',
+            payload: { selector: '#test', tag: 'div', text: 'Hi' },
+          },
+        });
+        expect(writeTextMock).not.toHaveBeenCalled();
+
+        // 2. Message from valid source with textarea absent -> clipboard fallback
+        (globalThis as any).document = {
+          querySelector: vi.fn().mockReturnValue(null),
+        };
+        listeners['message']({
+          source: mockIframeWindow,
+          data: {
+            type: 'REALBROWSER_ELEMENT_PICKED',
+            payload: { selector: '#test', tag: 'div', text: 'Hi', xpath: '/html/body/div' },
+          },
+        });
+        expect(writeTextMock).toHaveBeenCalledWith('Element selected: `#test` [XPath: `/html/body/div`] (<div>: "Hi")');
+
+        // 3. Cleanup removes event listener
+        cleanup();
+        expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('message', expect.any(Function));
+      } finally {
+        (globalThis as any).React = originalReact;
+        (globalThis as any).window = originalWindow;
+        if (originalNavigatorDesc) {
+          Object.defineProperty(globalThis, 'navigator', originalNavigatorDesc);
+        } else {
+          delete (globalThis as any).navigator;
+        }
+        (globalThis as any).document = originalDocument;
+      }
     });
   });
 });

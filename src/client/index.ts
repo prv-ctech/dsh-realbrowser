@@ -4,9 +4,13 @@ export interface PickedElement {
   selector: string;
   tag: string;
   text: string;
+  xpath?: string;
 }
 
 export function formatPickedElementMessage(el: PickedElement): string {
+  if (el.xpath) {
+    return `Element selected: \`${el.selector}\` [XPath: \`${el.xpath}\`] (<${el.tag}>: "${el.text}")`;
+  }
   return `Element selected: \`${el.selector}\` (<${el.tag}>: "${el.text}")`;
 }
 
@@ -43,9 +47,12 @@ export function createClientPlugin(host: any) {
             });
 
             const onMessage = (e: MessageEvent) => {
+              if (iframeRef.current && e.source !== iframeRef.current.contentWindow) return;
               if (e.data && e.data.type === 'REALBROWSER_ELEMENT_PICKED') {
                 const msg = formatPickedElementMessage(e.data.payload);
-                injectIntoChatTextarea(msg);
+                if (!injectIntoChatTextarea(msg)) {
+                  navigator.clipboard?.writeText?.(msg);
+                }
                 setPickerActive(false);
               }
             };
