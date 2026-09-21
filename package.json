@@ -2,6 +2,7 @@
   "name": "dsh-realbrowser",
   "version": "0.0.1",
   "description": "Full agentic web browser for DeepSeek Harness",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/prv-ctech/dsh-realbrowser.git"
@@ -14,7 +15,8 @@
   "files": [
     "dist/",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "main": "dist/index.js",
   "exports": {

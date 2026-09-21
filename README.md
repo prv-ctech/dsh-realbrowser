@@ -13,6 +13,12 @@ RealBrowser is a full agentic web browser inside DeepSeek Harness. You and your 
 
 RealBrowser requires DeepSeek Harness and Chrome or Chromium.
 
+If you installed the legacy `realbrowser` package, remove it first:
+
+```bash
+dsh plugin --profile tauri remove realbrowser
+```
+
 ```bash
 dsh plugin --profile tauri add https://github.com/prv-ctech/dsh-realbrowser/releases/download/v0.0.1/dsh-realbrowser-0.0.1.tgz
 ```
@@ -34,5 +40,5 @@ Fully restart DeepSeek Harness, then open **RealBrowser** from the browser butto
 
 Use **Responsive** for the available panel size, or choose desktop, ultrawide, tablet, phone, and foldable presets. RealBrowser includes sizes from Full HD through 4K and common Apple, Samsung, Google, Microsoft, and Xiaomi devices.
 
-- [Tool guide](docs/API.md)
-- [How RealBrowser works](docs/ARCHITECTURE.md)
+- [Tool guide](https://github.com/prv-ctech/dsh-realbrowser/blob/master/docs/API.md)
+- [How RealBrowser works](https://github.com/prv-ctech/dsh-realbrowser/blob/master/docs/ARCHITECTURE.md)

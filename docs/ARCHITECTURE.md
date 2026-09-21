@@ -29,4 +29,4 @@ RealBrowser host -------- Chrome / Chromium
 
 ## Browser data
 
-RealBrowser starts a dedicated Chrome profile for its session. Websites still control login rules, bot checks, permissions, and available content.
+RealBrowser starts one temporary Chrome profile per plugin run. Websites still control login rules, bot checks, permissions, and available content.
