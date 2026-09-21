@@ -472,8 +472,23 @@ export class ChromeController {
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const proc = spawn(binary, args, { stdio: 'ignore' });
+      let debuggerReady = false;
+      let stderrTail = Buffer.alloc(0);
+      const proc = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe'] });
       this.proc = proc;
+      const stderr = () => stderrTail.toString('utf8').trimEnd() || '<empty>';
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        const limit = 16 * 1024;
+        if (chunk.length >= limit) {
+          stderrTail = Buffer.from(chunk.subarray(chunk.length - limit));
+          return;
+        }
+        const combined = Buffer.concat([stderrTail, chunk]);
+        stderrTail = combined.length > limit
+          ? Buffer.from(combined.subarray(combined.length - limit))
+          : combined;
+      });
 
       proc.on('error', (err) => {
         if (!settled) {
@@ -484,27 +499,44 @@ export class ChromeController {
         }
       });
 
-      this.waitForDebugger()
-        .then(() => this.getPageWsUrl())
-        .then((wsUrl) => this.cdp.connect(wsUrl))
-        .then(() => this.initialize())
-        .then(() => {
+      proc.on('close', (code, signal) => {
+        if (this.proc === proc) this.proc = null;
+        if (!settled && !debuggerReady) {
+          settled = true;
+          this.cleanupUserDataDir();
+          reject(new Error(
+            `Chrome exited before debugger readiness: binary ${binary}; exit code ${code ?? 'unknown'}; ` +
+            `signal ${signal ?? 'none'}; current port ${this.port}; stderr:\n${stderr()}`,
+          ));
+        }
+      });
+
+      void (async () => {
+        try {
+          await this.waitForDebugger(20, () => settled);
+          debuggerReady = true;
+          const wsUrl = await this.getPageWsUrl();
+          await this.cdp.connect(wsUrl);
+          await this.initialize();
           if (!settled) {
             settled = true;
             resolve();
           }
-        })
-        .catch((err) => {
+        } catch (cause) {
           if (!settled) {
             settled = true;
-            if (this.proc) {
-              this.proc.kill();
+            if (this.proc === proc) {
+              proc.kill();
               this.proc = null;
             }
             this.cleanupUserDataDir();
-            reject(err);
+            const err = cause instanceof Error ? cause : new Error(String(cause));
+            reject(err.message === 'Timed out waiting for Chrome debugging port'
+              ? new Error(`${err.message}: binary ${binary}; current port ${this.port}; stderr:\n${stderr()}`)
+              : err);
           }
-        });
+        }
+      })();
     });
   }
 
@@ -520,8 +552,9 @@ export class ChromeController {
     return undefined;
   }
 
-  private async waitForDebugger(maxRetries = 20): Promise<void> {
+  private async waitForDebugger(maxRetries = 20, isCancelled = () => false): Promise<void> {
     for (let i = 0; i < maxRetries; i++) {
+      if (isCancelled()) throw new Error('Chrome launch cancelled');
       try {
         this.port = this.readAssignedPort() ?? this.port;
         await new Promise<void>((resolve, reject) => {
@@ -532,6 +565,7 @@ export class ChromeController {
         });
         return;
       } catch {
+        if (isCancelled()) throw new Error('Chrome launch cancelled');
         await new Promise((r) => setTimeout(r, 250));
       }
     }

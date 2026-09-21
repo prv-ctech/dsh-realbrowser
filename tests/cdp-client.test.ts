@@ -363,6 +363,37 @@ describe('ChromeController', () => {
     server.close();
   });
 
+  it('reports bounded stderr when Chrome exits before debugger readiness', async () => {
+    const earlyMarker = 'REALBROWSER_EARLY_STDERR_SHOULD_BE_DISCARDED';
+    const trailingMarker = 'REALBROWSER_TRAILING_STDERR_MARKER';
+    const stderr = `${earlyMarker}\n${'x'.repeat(17 * 1024)}\n${trailingMarker}\n`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realbrowser-fake-chrome-'));
+    const binary = path.join(dir, 'fake-chrome');
+    fs.writeFileSync(
+      binary,
+      `#!/usr/bin/env node\nprocess.stderr.write(${JSON.stringify(stderr)}, () => process.exit(23));\n`,
+      { mode: 0o755 },
+    );
+    const controller = new ChromeController(mockCdp, 0, binary);
+    const started = Date.now();
+
+    try {
+      let error: Error | undefined;
+      try {
+        await controller.launch();
+      } catch (cause) {
+        error = cause as Error;
+      }
+
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(error?.message).toContain('exit code 23');
+      expect(error?.message).toContain(trailingMarker);
+      expect(error?.message).not.toContain(earlyMarker);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 7_000);
+
   it('resets a Chrome-assigned port before relaunch', async () => {
     const controller = new ChromeController(mockCdp, 0, 'nonexistent-chrome-binary-test-xyz');
     controller.port = 54321;
