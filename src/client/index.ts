@@ -503,7 +503,7 @@ function registerClient(ctx: any, host?: any) {
     const sidebar = injected.get?.('betterSidebar') || injected.betterSidebar;
     if (!sidebar) return;
     sidebar.registerTab({
-      id: 'realbrowser', title: 'Browser', order: 45,
+      id: 'realbrowser', title: 'RealBrowser', order: 45,
       icon: (size: number) => React.createElement('svg', {
         width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
         stroke: 'currentColor', strokeWidth: '1.2', 'aria-hidden': true,
@@ -520,7 +520,7 @@ function registerClient(ctx: any, host?: any) {
       name: 'conversation.session.header.actions', id: 'realbrowser-open-btn', order: 25,
     }, () => React.createElement('button', {
       type: 'button',
-      onClick: () => (ctx.get?.('betterSidebar') || ctx.betterSidebar)?.openTab({ type: 'realbrowser', title: 'Browser' }),
+      onClick: () => (ctx.get?.('betterSidebar') || ctx.betterSidebar)?.openTab({ type: 'realbrowser', title: 'RealBrowser' }),
       title: 'Open RealBrowser', 'aria-label': 'Open RealBrowser',
       style: {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '3px 8px',
@@ -528,7 +528,7 @@ function registerClient(ctx: any, host?: any) {
         borderRadius: '6px', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer',
         fontSize: '12px', lineHeight: '18px',
       },
-    }, 'Browser')));
+    }, 'RealBrowser')));
   }
 }
 

@@ -1,7 +1,15 @@
 {
-  "name": "realbrowser",
+  "name": "dsh-realbrowser",
   "version": "0.0.1",
-  "description": "Interactive embedded browser plugin for DSH with Chrome DevTools and Element Picker",
+  "description": "Full agentic web browser for DeepSeek Harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prv-ctech/dsh-realbrowser.git"
+  },
+  "homepage": "https://github.com/prv-ctech/dsh-realbrowser#readme",
+  "bugs": {
+    "url": "https://github.com/prv-ctech/dsh-realbrowser/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "exports": {
