@@ -345,6 +345,24 @@ describe('ChromeController', () => {
     await Promise.all([p1, p2]);
   });
 
+  it('defaults to a Chrome-assigned debugging port', () => {
+    expect(new ChromeController(mockCdp).port).toBe(0);
+  });
+
+  it('reads Chrome assigned port before debugger polling', async () => {
+    const server = http.createServer((_req, res) => { res.writeHead(200); res.end('{}'); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realbrowser-port-test-'));
+    fs.writeFileSync(path.join(dir, 'DevToolsActivePort'), `${port}\n/devtools/browser/test\n`);
+    const controller = new ChromeController(mockCdp);
+    (controller as any).userDataDir = dir;
+    await (controller as any).waitForDebugger(2);
+    expect(controller.port).toBe(port);
+    controller.close();
+    server.close();
+  });
+
   it('waitForDebugger times out if port is unreachable', async () => {
     // Port 1 is not open
     const controller = new ChromeController(mockCdp, 1);

@@ -207,7 +207,7 @@ export class ChromeController {
   private frameSequence = 0;
   private latestFrame: { sequence: number; data: Buffer; mediaType: 'image/jpeg' } | null = null;
 
-  constructor(cdp: CDPClient = new CDPClient(), port = 9222, executablePath?: string) {
+  constructor(cdp: CDPClient = new CDPClient(), port = 0, executablePath?: string) {
     this.cdp = cdp;
     this.port = port;
     this.executablePath = executablePath;
@@ -505,9 +505,22 @@ export class ChromeController {
     });
   }
 
+  private readAssignedPort(): number | undefined {
+    if (this.port !== 0 || !this.userDataDir) return this.port || undefined;
+    try {
+      const value = Number.parseInt(
+        fs.readFileSync(path.join(this.userDataDir, 'DevToolsActivePort'), 'utf8').split(/\r?\n/, 1)[0],
+        10,
+      );
+      if (Number.isInteger(value) && value > 0 && value <= 65535) return value;
+    } catch {}
+    return undefined;
+  }
+
   private async waitForDebugger(maxRetries = 20): Promise<void> {
     for (let i = 0; i < maxRetries; i++) {
       try {
+        this.port = this.readAssignedPort() ?? this.port;
         await new Promise<void>((resolve, reject) => {
           http.get(`http://127.0.0.1:${this.port}/json/version`, (res) => {
             if (res.statusCode === 200) resolve();
