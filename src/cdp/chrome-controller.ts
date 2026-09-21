@@ -5,6 +5,128 @@ import os from 'node:os';
 import path from 'node:path';
 import { CDPClient } from './cdp-client.js';
 
+/** Build layouts used by the puppeteer / playwright download caches. */
+const CACHED_BUILD_LAYOUTS = [
+  path.join('chrome-linux64', 'chrome'),
+  path.join('chrome-linux', 'chrome'),
+  path.join('chrome-headless-shell-linux64', 'chrome-headless-shell'),
+  path.join('chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+  path.join('chrome-win64', 'chrome.exe'),
+];
+
+/** Browser executable names looked up on PATH. */
+const PATH_BROWSER_NAMES = [
+  'google-chrome',
+  'google-chrome-stable',
+  'chromium',
+  'chromium-browser',
+  'chrome',
+];
+
+function isExecutable(candidate: string): boolean {
+  try {
+    if (!fs.statSync(candidate).isFile()) return false;
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Roots that hold downloaded browser builds on this machine. */
+function defaultBrowserCacheRoots(): string[] {
+  const home = os.homedir();
+  return [
+    process.env.PUPPETEER_CACHE_DIR || path.join(home, '.cache', 'puppeteer', 'chrome'),
+    process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(home, '.cache', 'ms-playwright'),
+  ];
+}
+
+/**
+ * Find a downloaded browser build under any of `roots`. Version directories are
+ * scanned newest-name-first so a newer build wins.
+ *
+ * @param roots - cache roots; defaults to the puppeteer/playwright locations.
+ * @returns the executable path, or undefined when no root holds a usable build.
+ */
+export function findCachedBrowserBinary(
+  roots: string[] = defaultBrowserCacheRoots(),
+): string | undefined {
+  for (const root of roots) {
+    let versions: string[];
+    try {
+      versions = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const version of versions.sort().reverse()) {
+      for (const layout of CACHED_BUILD_LAYOUTS) {
+        const candidate = path.join(root, version, layout);
+        if (isExecutable(candidate)) return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
+export interface ChromeLookup {
+  /** Directories searched for a browser executable, in order. */
+  pathDirs?: string[];
+  /** Cache roots holding downloaded browser builds. */
+  cacheRoots?: string[];
+  /** Environment supplying CHROME_PATH / CHROME_BIN and PATH. */
+  env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Resolve a usable Chrome/Chromium executable.
+ *
+ * Lookup order: explicit path, `CHROME_PATH`/`CHROME_BIN`, PATH entries, then
+ * the downloaded-browser caches. Throwing an actionable error matters here — the
+ * previous fallback returned the bare name `google-chrome`, so a machine with no
+ * system Chrome failed much later as `spawn google-chrome ENOENT`, far from the
+ * cause and invisible to the user.
+ *
+ * @param explicit - caller-supplied path; validated, never silently ignored.
+ * @param lookup - injectable discovery inputs (tests).
+ * @returns an absolute path to an executable browser.
+ */
+export function resolveChromeBinary(explicit?: string, lookup: ChromeLookup = {}): string {
+  if (explicit) {
+    if (isExecutable(explicit)) return explicit;
+    throw new Error(`RealBrowser: the configured Chrome path is not executable: ${explicit}`);
+  }
+
+  const env = lookup.env ?? process.env;
+  for (const key of ['CHROME_PATH', 'CHROME_BIN'] as const) {
+    const value = env[key]?.trim();
+    if (!value) continue;
+    if (isExecutable(value)) return value;
+    throw new Error(`RealBrowser: ${key} is not an executable path: ${value}`);
+  }
+
+  const pathDirs = lookup.pathDirs ?? (env.PATH || '').split(path.delimiter);
+  const names =
+    process.platform === 'win32'
+      ? PATH_BROWSER_NAMES.flatMap((name) => [`${name}.exe`, name])
+      : PATH_BROWSER_NAMES;
+  for (const name of names) {
+    for (const dir of pathDirs) {
+      if (!dir) continue;
+      const candidate = path.join(dir, name);
+      if (isExecutable(candidate)) return candidate;
+    }
+  }
+
+  const cached = findCachedBrowserBinary(lookup.cacheRoots);
+  if (cached) return cached;
+
+  throw new Error(
+    'RealBrowser could not find a Chrome/Chromium executable. Install Chrome or Chromium, or ' +
+      'point CHROME_PATH at the browser binary (a download under ~/.cache/puppeteer works).',
+  );
+}
+
 export class ChromeController {
   private proc: ChildProcess | null = null;
   private cdp: CDPClient;
@@ -20,30 +142,7 @@ export class ChromeController {
   }
 
   private resolveBinary(): string {
-    if (this.executablePath) return this.executablePath;
-    if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-    if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
-
-    const candidates = ['google-chrome', 'chromium', 'chromium-browser'];
-    const pathEnv = process.env.PATH || '';
-    const delimiter = process.platform === 'win32' ? ';' : ':';
-    const dirs = pathEnv.split(delimiter);
-
-    for (const candidate of candidates) {
-      for (const dir of dirs) {
-        if (!dir) continue;
-        const fullPath = path.join(dir, candidate);
-        try {
-          if (fs.existsSync(fullPath)) {
-            fs.accessSync(fullPath, fs.constants.X_OK);
-            return fullPath;
-          }
-        } catch {
-          // ignore and continue
-        }
-      }
-    }
-    return candidates[0];
+    return resolveChromeBinary(this.executablePath);
   }
 
   async ensureLaunched(headless = true): Promise<void> {

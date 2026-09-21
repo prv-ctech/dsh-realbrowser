@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createHostPlugin } from '../src/host/index.js';
 
 describe('Host Plugin', () => {
@@ -93,7 +95,16 @@ describe('Host Plugin', () => {
     const screenshotTool = tools.get('realbrowser_screenshot')!;
     const screenshotResult = await screenshotTool.execute();
     expect(mockChrome.screenshot).toHaveBeenCalled();
-    expect(screenshotResult).toBe('base64_screenshot_data');
+    // The screenshot is persisted to a PNG file and the path is returned, so a
+    // base64 payload never enters the model's context.
+    expect(screenshotResult.path.endsWith('.png')).toBe(true);
+    expect(screenshotResult.bytes).toBe(
+      Buffer.from('base64_screenshot_data', 'base64').byteLength,
+    );
+    expect(fs.readFileSync(screenshotResult.path)).toEqual(
+      Buffer.from('base64_screenshot_data', 'base64'),
+    );
+    fs.rmSync(path.dirname(screenshotResult.path), { recursive: true, force: true });
 
     const domTool = tools.get('realbrowser_get_dom')!;
     const domResult = await domTool.execute({ selector: '#app' });
@@ -226,6 +237,49 @@ describe('Host Plugin', () => {
     callOrder.length = 0;
     await tools.get('realbrowser_get_dom').execute({ selector: '#test' });
     expect(callOrder).toEqual(['ensureLaunched', 'getDom']);
+  });
+
+  // Regression guard: the DSH tools registry throws
+  // `tool "<name>" must declare output { schema, render, presentationMeta? }`
+  // for a definition without `output`, and that throw is FATAL during
+  // composition load — it aborts the whole harness boot rather than just
+  // disabling the plugin.
+  it('declares output { schema, render } on every registered tool', async () => {
+    const registered: any[] = [];
+    const mockCtx = {
+      tools: {
+        register: (tool: any) => {
+          registered.push(tool);
+        },
+      },
+    };
+
+    const plugin = createHostPlugin({
+      chrome: { close: vi.fn() },
+      startProxy: vi.fn().mockResolvedValue({ port: 8888, close: vi.fn() }),
+    });
+    await plugin.apply(mockCtx);
+
+    expect(registered.map((t) => t.name)).toEqual([
+      'realbrowser_navigate',
+      'realbrowser_screenshot',
+      'realbrowser_get_dom',
+      'realbrowser_click',
+      'realbrowser_type',
+      'realbrowser_evaluate',
+    ]);
+
+    for (const tool of registered) {
+      expect(tool.output, `${tool.name} must declare output`).toBeDefined();
+      expect(typeof tool.output.render, `${tool.name}.output.render`).toBe('function');
+      expect(tool.output.schema, `${tool.name}.output.schema`).toBeDefined();
+      // render() must yield model-facing content blocks for a real value.
+      const blocks = tool.output.render({}, { path: '/tmp/x.png', bytes: 1 });
+      expect(Array.isArray(blocks), `${tool.name}.output.render must return blocks`).toBe(true);
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(blocks[0].type).toBe('text');
+      expect(typeof blocks[0].text).toBe('string');
+    }
   });
 });
 

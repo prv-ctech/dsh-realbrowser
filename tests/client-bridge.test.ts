@@ -3,7 +3,22 @@ import {
   formatPickedElementMessage,
   injectIntoChatTextarea,
   createClientPlugin,
+  normalizeHttpUrl,
 } from '../src/client/index.js';
+
+describe('normalizeHttpUrl', () => {
+  it.each([
+    ['youtube.com', 'https://youtube.com'],
+    ['  google.com/search?q=dsh  ', 'https://google.com/search?q=dsh'],
+    ['https://example.com/path', 'https://example.com/path'],
+    ['http://localhost:3000', 'http://localhost:3000'],
+    ['HTTPS://EXAMPLE.COM', 'HTTPS://EXAMPLE.COM'],
+    ['', ''],
+    ['   ', ''],
+  ])('normalizes %j to %j', (input, expected) => {
+    expect(normalizeHttpUrl(input)).toBe(expected);
+  });
+});
 
 describe('Client Bridge', () => {
   it('formats picked element markdown context', () => {
@@ -182,7 +197,9 @@ describe('Client Bridge', () => {
       const createdElements: any[] = [];
       (globalThis as any).React = {
         useState: vi.fn((init) => [init, vi.fn()]),
-        useRef: vi.fn(() => mockIframeRef),
+        useRef: vi.fn()
+          .mockReturnValueOnce(mockIframeRef)
+          .mockImplementation((initial: any) => ({ current: initial })),
         useEffect: vi.fn(),
         createElement: vi.fn((type, props, ...children) => {
           const el = { type, props, children };
@@ -240,6 +257,7 @@ describe('Client Bridge', () => {
       const setUrlMock = vi.fn();
       const setInputUrlMock = vi.fn();
       const mockIframeRef = { current: null };
+      let stateCall = 0;
 
       const originalReact = (globalThis as any).React;
       const originalWindow = (globalThis as any).window;
@@ -251,10 +269,14 @@ describe('Client Bridge', () => {
       const createdElements: any[] = [];
       (globalThis as any).React = {
         useState: vi.fn((init) => {
-          if (init === 'https://example.com') return [init, setUrlMock];
+          const index = stateCall++;
+          if (index === 0) return [init, setUrlMock];
+          if (index === 1) return ['youtube.com', setInputUrlMock];
           return [init, vi.fn()];
         }),
-        useRef: vi.fn(() => mockIframeRef),
+        useRef: vi.fn()
+          .mockReturnValueOnce(mockIframeRef)
+          .mockImplementation((initial: any) => ({ current: initial })),
         useEffect: vi.fn((cb) => { effectCallback = cb; }),
         createElement: vi.fn((type, props, ...children) => {
           const el = { type, props, children };
@@ -271,16 +293,128 @@ describe('Client Bridge', () => {
         const cleanup = effectCallback();
         expect(host.call).toHaveBeenCalledWith('realbrowser-get-current-url');
 
-        // Verify Go button calls host realbrowser-navigate
+        // Both address-bar submission paths normalize a bare hostname.
+        const addressInput = createdElements.find((el) => el.type === 'input');
         const goBtn = createdElements.find((el) => el.type === 'button' && el.children?.[0] === 'Go');
+        expect(addressInput).toBeDefined();
         expect(goBtn).toBeDefined();
+        host.call.mockClear();
+
         goBtn.props.onClick();
-        expect(host.call).toHaveBeenCalledWith('realbrowser-navigate', { url: expect.any(String) });
+        addressInput.props.onKeyDown({ key: 'Enter' });
+
+        expect(host.call).toHaveBeenCalledTimes(2);
+        expect(host.call).toHaveBeenNthCalledWith(1, 'realbrowser-navigate', { url: 'https://youtube.com' });
+        expect(host.call).toHaveBeenNthCalledWith(2, 'realbrowser-navigate', { url: 'https://youtube.com' });
 
         cleanup();
       } finally {
         (globalThis as any).React = originalReact;
         (globalThis as any).window = originalWindow;
+      }
+    });
+
+    // Reported bug: typing a new URL snapped back to whatever URL the host last
+    // reported. The poll compared the host URL against the CURRENT local URL, so
+    // a stale/unchanged host value overwrote the user's navigation on every tick.
+    it('does not let a delayed initial poll revert user navigation', async () => {
+      let registeredComponent: any;
+      const mockSlots = {
+        inject: vi.fn((_name: string, cb: any) => cb()),
+        register: vi.fn((_config: any, comp: any) => { registeredComponent = comp; }),
+      };
+      let resolveInitialUrl!: (value: { url: string }) => void;
+      const initialUrl = new Promise<{ url: string }>((resolve) => { resolveInitialUrl = resolve; });
+      let reportedUrl = 'https://example.com';
+      let urlRequest = 0;
+      const host = {
+        call: vi.fn((method: string) => {
+          if (method === 'realbrowser-get-current-url') {
+            return urlRequest++ === 0 ? initialUrl : Promise.resolve({ url: reportedUrl });
+          }
+          return Promise.resolve({ ok: true });
+        }),
+      };
+      const plugin = createClientPlugin(host);
+      plugin.apply({ get: vi.fn().mockReturnValue(mockSlots) });
+
+      let urlState = 'https://example.com';
+      const setUrl = vi.fn((updater: any) => {
+        urlState = typeof updater === 'function' ? updater(urlState) : updater;
+      });
+      const setInputUrl = vi.fn();
+
+      let effectCallback: any;
+      let poll: any = null;
+      const mockIframeRef = { current: null };
+      const createdElements: any[] = [];
+
+      const originalReact = (globalThis as any).React;
+      const originalWindow = (globalThis as any).window;
+      const originalSetInterval = (globalThis as any).setInterval;
+      const originalClearInterval = (globalThis as any).clearInterval;
+
+      (globalThis as any).setInterval = vi.fn((cb: any) => { poll = cb; return 1; });
+      (globalThis as any).clearInterval = vi.fn();
+      (globalThis as any).window = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+
+      let stateCall = 0;
+      (globalThis as any).React = {
+        useState: vi.fn((init: any) => {
+          const index = stateCall++;
+          if (index === 0) return ['https://example.com', setUrl];
+          if (index === 1) return ['youtube.com', setInputUrl];
+          return [init, vi.fn()];
+        }),
+        useRef: vi.fn()
+          .mockReturnValueOnce(mockIframeRef)
+          .mockImplementation((initial: any) => ({ current: initial })),
+        useEffect: vi.fn((cb: any) => { effectCallback = cb; }),
+        createElement: vi.fn((type: any, props: any, ...children: any[]) => {
+          const element = { type, props, children };
+          createdElements.push(element);
+          return element;
+        }),
+      };
+
+      const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+      try {
+        registeredComponent();
+        const cleanup = effectCallback();
+        const goButton = createdElements.find((element) => element.type === 'button' && element.children?.[0] === 'Go');
+
+        goButton.props.onClick();
+        expect(urlState).toBe('https://youtube.com');
+
+        resolveInitialUrl({ url: 'https://example.com' });
+        await flush();
+        expect(urlState).toBe('https://youtube.com');
+        expect(setInputUrl).not.toHaveBeenCalledWith('https://example.com');
+
+        // The host may report a redirect destination rather than the typed URL.
+        reportedUrl = 'https://www.youtube.com/';
+        poll();
+        await flush();
+        expect(urlState).toBe('https://www.youtube.com/');
+
+        // Re-navigating must still clear pending state after the RPC completes.
+        goButton.props.onClick();
+        await flush();
+        poll();
+        await flush();
+
+        reportedUrl = 'https://agent-driven.example';
+        poll();
+        await flush();
+        expect(urlState).toBe('https://agent-driven.example');
+
+        cleanup();
+      } finally {
+        (globalThis as any).React = originalReact;
+        (globalThis as any).window = originalWindow;
+        (globalThis as any).setInterval = originalSetInterval;
+        (globalThis as any).clearInterval = originalClearInterval;
       }
     });
 
@@ -318,7 +452,9 @@ describe('Client Bridge', () => {
 
       (globalThis as any).React = {
         useState: vi.fn((init) => [init, vi.fn()]),
-        useRef: vi.fn(() => mockIframeRef),
+        useRef: vi.fn()
+          .mockReturnValueOnce(mockIframeRef)
+          .mockImplementation((initial: any) => ({ current: initial })),
         useEffect: vi.fn((cb) => { effectCallback = cb; }),
         createElement: vi.fn(),
       };
