@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   RealBrowserPanel,
   apply as applyClient,
+  callApi,
   createClientPlugin,
   inject as clientInject,
   normalizeHttpUrl,
 } from '../src/client/index.js';
 
 describe('client helpers', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it.each([
     ['youtube.com', 'https://youtube.com'],
     ['  google.com/search?q=dsh  ', 'https://google.com/search?q=dsh'],
@@ -16,6 +19,16 @@ describe('client helpers', () => {
     ['', ''],
   ])('normalizes %j to %j', (input, expected) => {
     expect(normalizeHttpUrl(input)).toBe(expected);
+  });
+
+  it('surfaces JSON API errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: 'Element moved before capture' }),
+      { status: 500, headers: { 'content-type': 'application/json' } },
+    )));
+
+    await expect(callApi('pick-element', { x: 1, y: 2 }))
+      .rejects.toThrow('Element moved before capture');
   });
 
   it('does not require the optional Better Sidebar service', () => {
@@ -96,8 +109,24 @@ describe('RealBrowserPanel', () => {
     expect(host.call).toHaveBeenNthCalledWith(3, 'realbrowser-command', { command: 'reload' });
   });
 
-  it('throttles picker hover requests and selects through host RPC', async () => {
+  it('keeps picker active across selections and renders a fixed blue overlay', async () => {
     const created: any[] = [];
+    const setPickerActive = vi.fn();
+    const addAttachments = vi.fn().mockReturnValue(true);
+    let attachmentBatch = 0;
+    const conversation = {
+      createDrafts: vi.fn(() => {
+        attachmentBatch += 1;
+        return [
+          { id: `metadata-${attachmentBatch}`, kind: 'file' },
+          { id: `image-${attachmentBatch}`, kind: 'image' },
+        ];
+      }),
+      input: {
+        shell: vi.fn().mockReturnValue({ actions: { addAttachments } }),
+      },
+    };
+    const ctx = { get: vi.fn((name: string) => name === 'conversation' ? conversation : undefined) };
     let resolveHover!: (value: unknown) => void;
     const hover = new Promise((resolve) => { resolveHover = resolve; });
     const host = {
@@ -119,7 +148,8 @@ describe('RealBrowserPanel', () => {
       useState: vi.fn((initial: any) => {
         const index = stateIndex++;
         if (index === 3) return ['blob:frame', vi.fn()];
-        if (index === 4) return [true, vi.fn()];
+        if (index === 4) return [true, setPickerActive];
+        if (index === 6) return [{ left: 1, top: 2, width: 3, height: 4 }, vi.fn()];
         return [initial, vi.fn()];
       }),
       useRef: vi.fn((initial: any) => {
@@ -134,19 +164,29 @@ describe('RealBrowserPanel', () => {
       }),
     };
 
-    RealBrowserPanel({ host, visible: false, scope: { sessionId: 'session-1' } });
+    RealBrowserPanel({ host, ctx, visible: false, scope: { sessionId: 'session-1' } });
     const image = created.find((element) => element.type === 'img');
+    const overlay = created.find((element) => element.type === 'div' && element.props['aria-hidden'] === true);
     const event = { clientX: 260, clientY: 145, button: 0, preventDefault: vi.fn(), stopPropagation: vi.fn() };
     image.props.onMouseMove(event);
-    const pickerButton = created.find((element) => element.type === 'button' && element.props['aria-pressed'] === true);
-    pickerButton.props.onClick();
     image.props.onMouseMove(event);
     expect(host.call.mock.calls.filter(([method]) => method === 'realbrowser-hover-element')).toHaveLength(1);
     resolveHover({ bounds: { x: 10, y: 10, width: 20, height: 20 } });
     await Promise.resolve();
 
     image.props.onClick(event);
-    expect(host.call).toHaveBeenCalledWith('realbrowser-pick-element', expect.any(Object));
+    await vi.waitFor(() => expect(addAttachments).toHaveBeenCalledTimes(1));
+    image.props.onClick(event);
+    await vi.waitFor(() => expect(addAttachments).toHaveBeenCalledTimes(2));
+
+    expect(host.call.mock.calls.filter(([method]) => method === 'realbrowser-pick-element')).toHaveLength(2);
+    expect(addAttachments.mock.calls).toEqual([
+      [['metadata-1', 'image-1']],
+      [['metadata-2', 'image-2']],
+    ]);
+    expect(setPickerActive).not.toHaveBeenCalledWith(false);
+    expect(overlay.props.style.border).toBe('2px solid #3b82f6');
+    expect(overlay.props.style.background).toBe('rgba(59, 130, 246, 0.18)');
   });
 
   it('registers a sidebar component that preserves Better Sidebar props', () => {

@@ -17,13 +17,18 @@ export function normalizeHttpUrl(value: string): string {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-const callApi = async (method: string, payload?: any) => {
+export const callApi = async (method: string, payload?: any) => {
   const response = await fetch(`/realbrowser/api/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload ?? {}),
   });
-  if (!response.ok) throw new Error(`RealBrowser request failed (${response.status})`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined);
+    throw new Error(typeof body?.error === 'string' && body.error
+      ? body.error
+      : `RealBrowser request failed (${response.status})`);
+  }
   return response.json();
 };
 
@@ -303,7 +308,6 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
         await attachPickedElement(props.ctx, props.scope?.sessionId ?? '', value);
         pickerGenerationRef.current += 1;
         setPickerOverlay(null);
-        setPickerActive(false);
         setError('');
       })
       .catch(async (reason: unknown) => {
@@ -477,8 +481,8 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
           position: 'absolute', pointerEvents: 'none', boxSizing: 'border-box',
           left: `${pickerOverlay.left}px`, top: `${pickerOverlay.top}px`,
           width: `${pickerOverlay.width}px`, height: `${pickerOverlay.height}px`,
-          border: '2px solid var(--dsw-alias-brand-primary)',
-          background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)',
+          border: '2px solid #3b82f6',
+          background: 'rgba(59, 130, 246, 0.18)',
         },
       }) : null,
       !frameUrl ? React.createElement('div', { role: 'status' }, snapshot.loading ? 'Loading page…' : 'Waiting for browser frame…') : null,
