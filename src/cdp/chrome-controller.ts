@@ -128,21 +128,28 @@ export function resolveChromeBinary(explicit?: string, lookup: ChromeLookup = {}
   );
 }
 
-const ELEMENT_METADATA_FUNCTION = String.raw`function() {
+const ELEMENT_AT_POINT_FUNCTION = String.raw`function(x, y) {
+  let element = document.elementFromPoint(x, y);
+  while (element && element.shadowRoot) {
+    const nested = element.shadowRoot.elementFromPoint(x, y);
+    if (!nested || nested === element) break;
+    element = nested;
+  }
+  if (!element) return null;
   const cssEscape = (value) => globalThis.CSS?.escape
     ? globalThis.CSS.escape(value)
     : value.replace(/[^a-zA-Z0-9_-]/g, (char) => '\\' + char.codePointAt(0).toString(16) + ' ');
   const css = [];
-  for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
-    if (element.id) {
-      css.unshift('#' + cssEscape(element.id));
+  for (let current = element; current && current.nodeType === 1; current = current.parentElement) {
+    if (current.id) {
+      css.unshift('#' + cssEscape(current.id));
       break;
     }
-    let part = element.tagName.toLowerCase();
-    const siblings = element.parentElement
-      ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
+    let part = current.tagName.toLowerCase();
+    const siblings = current.parentElement
+      ? Array.from(current.parentElement.children).filter((child) => child.tagName === current.tagName)
       : [];
-    if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(element) + 1) + ')';
+    if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')';
     css.unshift(part);
   }
   const xpathLiteral = (value) => {
@@ -156,24 +163,26 @@ const ELEMENT_METADATA_FUNCTION = String.raw`function() {
     return 'concat(' + items.join(', ') + ')';
   };
   const xpath = [];
-  for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
-    if (element.id) {
-      xpath.unshift('//*[@id=' + xpathLiteral(element.id) + ']');
+  for (let current = element; current && current.nodeType === 1; current = current.parentElement) {
+    if (current.id) {
+      xpath.unshift('//*[@id=' + xpathLiteral(current.id) + ']');
       break;
     }
-    const tag = element.tagName.toLowerCase();
-    const siblings = element.parentElement
-      ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
+    const tag = current.tagName.toLowerCase();
+    const siblings = current.parentElement
+      ? Array.from(current.parentElement.children).filter((child) => child.tagName === current.tagName)
       : [];
-    xpath.unshift(tag + (siblings.length > 1 ? '[' + (siblings.indexOf(element) + 1) + ']' : ''));
+    xpath.unshift(tag + (siblings.length > 1 ? '[' + (siblings.indexOf(current) + 1) + ']' : ''));
   }
+  const rect = element.getBoundingClientRect();
   return {
     selector: css.join(' > '),
     xpath: xpath.join('/'),
-    tag: this.tagName.toLowerCase(),
-    text: (this.textContent || '').trim().slice(0, 500),
-    html: (this.outerHTML || '').slice(0, 4000),
+    tag: element.tagName.toLowerCase(),
+    text: (element.textContent || '').trim().slice(0, 500),
+    html: (element.outerHTML || '').slice(0, 4000),
     url: location.href,
+    bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
   };
 }`;
 
@@ -325,61 +334,38 @@ export class ChromeController {
     y: number,
   ): Promise<Omit<PickedElementResult, 'screenshotBase64' | 'screenshotMediaType'>> {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Element coordinates must be finite');
-    const layout = await this.cdp.send<{ cssLayoutViewport?: { pageX: number; pageY: number } }>('Page.getLayoutMetrics');
-    const viewport = layout.cssLayoutViewport;
-    if (!viewport || ![viewport.pageX, viewport.pageY].every(Number.isFinite)) {
-      throw new Error('Browser viewport metrics are unavailable');
-    }
-    const location = await this.cdp.send<{ nodeId?: number; backendNodeId?: number }>('DOM.getNodeForLocation', {
-      x: x + viewport.pageX,
-      y: y + viewport.pageY,
-      includeUserAgentShadowDOM: true,
+    const response = await this.cdp.send<{ result?: { value?: any } }>('Runtime.evaluate', {
+      expression: `(${ELEMENT_AT_POINT_FUNCTION})(${JSON.stringify(x)}, ${JSON.stringify(y)})`,
+      returnByValue: true,
     });
-    const node = location.nodeId
-      ? { nodeId: location.nodeId }
-      : location.backendNodeId
-        ? { backendNodeId: location.backendNodeId }
-        : null;
-    if (!node) throw new Error('No element found at coordinates');
-
-    const box = await this.cdp.send<{ model?: { border?: number[]; content?: number[] } }>('DOM.getBoxModel', node);
-    const quad = box.model?.border ?? box.model?.content;
-    if (!quad || quad.length < 8 || quad.some((value) => !Number.isFinite(value))) {
+    const value = response.result?.value;
+    if (value === null) throw new Error('No element found at coordinates');
+    if (!value || typeof value !== 'object') throw new Error('Element metadata is unavailable');
+    if (![value.selector, value.xpath, value.tag, value.text, value.html, value.url]
+      .every((field) => typeof field === 'string')) {
+      throw new Error('Element metadata is unavailable');
+    }
+    const rawBounds = value.bounds;
+    if (!rawBounds || typeof rawBounds !== 'object' ||
+        ![rawBounds.x, rawBounds.y, rawBounds.width, rawBounds.height].every(Number.isFinite)) {
       throw new Error('Element bounds are unavailable');
     }
-    const xs = [quad[0], quad[2], quad[4], quad[6]];
-    const ys = [quad[1], quad[3], quad[5], quad[7]];
-    const left = Math.min(...xs);
-    const top = Math.min(...ys);
-    const right = Math.max(...xs);
-    const bottom = Math.max(...ys);
-    const bounds = { x: left, y: top, width: right - left, height: bottom - top };
+    const bounds = {
+      x: rawBounds.x,
+      y: rawBounds.y,
+      width: rawBounds.width,
+      height: rawBounds.height,
+    };
     if (bounds.width <= 0 || bounds.height <= 0) throw new Error('Element bounds must have positive size');
-
-    const resolved = await this.cdp.send<{ object?: { objectId?: string } }>('DOM.resolveNode', node);
-    const objectId = resolved.object?.objectId;
-    if (!objectId) throw new Error('Element remote object is unavailable');
-
-    try {
-      const response = await this.cdp.send<{ result?: { value?: any } }>('Runtime.callFunctionOn', {
-        objectId,
-        returnByValue: true,
-        functionDeclaration: ELEMENT_METADATA_FUNCTION,
-      });
-      const value = response.result?.value;
-      if (!value || typeof value !== 'object') throw new Error('Element metadata is unavailable');
-      return {
-        selector: typeof value.selector === 'string' ? value.selector : '',
-        xpath: typeof value.xpath === 'string' ? value.xpath : '',
-        tag: typeof value.tag === 'string' ? value.tag.toLowerCase() : '',
-        text: typeof value.text === 'string' ? value.text.slice(0, 500) : '',
-        html: typeof value.html === 'string' ? value.html.slice(0, 4000) : '',
-        url: typeof value.url === 'string' ? value.url : '',
-        bounds,
-      };
-    } finally {
-      await this.cdp.send('Runtime.releaseObject', { objectId });
-    }
+    return {
+      selector: value.selector,
+      xpath: value.xpath,
+      tag: value.tag.toLowerCase(),
+      text: value.text.slice(0, 500),
+      html: value.html.slice(0, 4000),
+      url: value.url,
+      bounds,
+    };
   }
 
   async pickElementAt(x: number, y: number): Promise<PickedElementResult> {

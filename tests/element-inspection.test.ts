@@ -3,22 +3,21 @@ import { ChromeController } from '../src/cdp/chrome-controller.js';
 
 function elementCdpFake(overrides: Record<string, unknown> = {}) {
   const defaults: Record<string, unknown> = {
-    'DOM.getNodeForLocation': { nodeId: 7 },
-    'DOM.getBoxModel': { model: { border: [100, 60, 280, 60, 280, 104, 100, 104] } },
-    'DOM.resolveNode': { object: { objectId: 'object-7' } },
-    'Runtime.callFunctionOn': { result: { value: {
-      selector: 'main > form#login > button[type="submit"]',
-      xpath: '//*[@id="login"]/button[1]',
-      tag: 'button',
-      text: 'Sign in',
-      html: '<button type="submit">Sign in</button>',
-      url: 'https://example.test/login',
-    } } },
+    'Runtime.evaluate': {
+      result: { value: {
+        selector: '#sign-in',
+        xpath: '//*[@id="sign-in"]',
+        tag: 'a',
+        text: 'Sign in',
+        html: '<a id="sign-in">Sign in</a>',
+        url: 'https://example.test/',
+        bounds: { x: 361, y: 8.5, width: 75, height: 40 },
+      } },
+    },
     'Page.getLayoutMetrics': {
       cssLayoutViewport: { pageX: 0, pageY: 0, clientWidth: 800, clientHeight: 600 },
     },
     'Page.captureScreenshot': { data: Buffer.from('webp').toString('base64') },
-    'Runtime.releaseObject': {},
   };
   const listeners = new Map<string, Function>();
   const send = vi.fn(async (method: string) => overrides[method] ?? defaults[method] ?? {});
@@ -33,32 +32,36 @@ function elementCdpFake(overrides: Record<string, unknown> = {}) {
 }
 
 describe('element inspection', () => {
-  it('returns metadata, bounds, and a clipped WebP screenshot', async () => {
+  it('returns metadata, viewport bounds, and a clipped WebP screenshot', async () => {
     const { cdp, send } = elementCdpFake();
     const controller = new ChromeController(cdp);
     const result = await controller.pickElementAt(120, 80);
 
     expect(result).toMatchObject({
-      selector: 'main > form#login > button[type="submit"]',
-      xpath: '//*[@id="login"]/button[1]',
-      tag: 'button',
+      selector: '#sign-in',
+      xpath: '//*[@id="sign-in"]',
+      tag: 'a',
       screenshotMediaType: 'image/webp',
-      bounds: { x: 100, y: 60, width: 180, height: 44 },
+      bounds: { x: 361, y: 8.5, width: 75, height: 40 },
     });
     expect(result.screenshotBase64).toBe(Buffer.from('webp').toString('base64'));
-    expect(send).toHaveBeenCalledWith('DOM.getNodeForLocation', {
-      x: 120, y: 80, includeUserAgentShadowDOM: true,
-    });
+    const evaluate = send.mock.calls.find(([method]) => method === 'Runtime.evaluate');
+    expect(evaluate?.[1]).toMatchObject({ returnByValue: true });
+    expect(evaluate?.[1].expression).toContain('document.elementFromPoint');
+    expect(evaluate?.[1].expression).toContain('shadowRoot.elementFromPoint');
+    expect(send).not.toHaveBeenCalledWith('DOM.getNodeForLocation', expect.anything());
     expect(send).toHaveBeenCalledWith('Page.captureScreenshot', expect.objectContaining({
       format: 'webp',
-      clip: { x: 100, y: 60, width: 180, height: 44, scale: 1 },
+      clip: { x: 361, y: 8.5, width: 75, height: 40, scale: 1 },
     }));
-    expect(send).toHaveBeenCalledWith('Runtime.releaseObject', { objectId: 'object-7' });
   });
 
   it('clips oversized element screenshots to the visible viewport', async () => {
     const { cdp, send } = elementCdpFake({
-      'DOM.getBoxModel': { model: { border: [0, 0, 800, 0, 800, 100000, 0, 100000] } },
+      'Runtime.evaluate': { result: { value: {
+        selector: 'body', xpath: 'body', tag: 'body', text: '', html: '<body></body>',
+        url: 'https://example.test/', bounds: { x: 0, y: 0, width: 800, height: 100000 },
+      } } },
     });
 
     await new ChromeController(cdp).pickElementAt(500, 500);
@@ -68,21 +71,20 @@ describe('element inspection', () => {
     }));
   });
 
-  it('translates viewport coordinates and screenshot clips after scrolling', async () => {
+  it('adds page offsets only when capturing a viewport-relative element', async () => {
     const { cdp, send } = elementCdpFake({
       'Page.getLayoutMetrics': {
         cssLayoutViewport: { pageX: 0, pageY: 50000, clientWidth: 800, clientHeight: 600 },
       },
-      'DOM.getBoxModel': { model: { border: [40, 100, 200, 100, 200, 160, 40, 160] } },
+      'Runtime.evaluate': { result: { value: {
+        selector: '#target', xpath: '//*[@id="target"]', tag: 'button', text: 'Target',
+        html: '<button id="target">Target</button>', url: 'https://example.test/',
+        bounds: { x: 40, y: 100, width: 160, height: 60 },
+      } } },
     });
 
     await new ChromeController(cdp).pickElementAt(80, 130);
 
-    expect(send).toHaveBeenCalledWith('DOM.getNodeForLocation', {
-      x: 80,
-      y: 50130,
-      includeUserAgentShadowDOM: true,
-    });
     expect(send).toHaveBeenCalledWith('Page.captureScreenshot', expect.objectContaining({
       clip: { x: 40, y: 50100, width: 160, height: 60, scale: 1 },
     }));
@@ -91,24 +93,16 @@ describe('element inspection', () => {
   it('inspects hover metadata without capturing an image', async () => {
     const { cdp, send } = elementCdpFake();
     const result = await new ChromeController(cdp).inspectElementAt(120, 80);
-    expect(result.bounds).toEqual({ x: 100, y: 60, width: 180, height: 44 });
+    expect(result.bounds).toEqual({ x: 361, y: 8.5, width: 75, height: 40 });
     expect(send).not.toHaveBeenCalledWith('Page.captureScreenshot', expect.anything());
   });
 
-  it('sends a syntactically valid page metadata function', async () => {
+  it('sends a syntactically valid page hit-test expression', async () => {
     const { cdp, send } = elementCdpFake();
     await new ChromeController(cdp).inspectElementAt(120, 80);
-    const call = send.mock.calls.find(([method]) => method === 'Runtime.callFunctionOn');
-    expect(call?.[1].functionDeclaration).not.toContain('__name');
-    expect(() => new Function(`return (${call?.[1].functionDeclaration})`)).not.toThrow();
-  });
-
-  it('uses backend node IDs returned by real Chrome', async () => {
-    const { cdp, send } = elementCdpFake({ 'DOM.getNodeForLocation': { backendNodeId: 9 } });
-    const result = await new ChromeController(cdp).inspectElementAt(120, 80);
-    expect(result.selector).toContain('button');
-    expect(send).toHaveBeenCalledWith('DOM.getBoxModel', { backendNodeId: 9 });
-    expect(send).toHaveBeenCalledWith('DOM.resolveNode', { backendNodeId: 9 });
+    const call = send.mock.calls.find(([method]) => method === 'Runtime.evaluate');
+    expect(call?.[1].expression).not.toContain('__name');
+    expect(() => new Function(`return (${call?.[1].expression})`)).not.toThrow();
   });
 
   it('rejects non-finite coordinates before calling CDP', async () => {
@@ -117,17 +111,24 @@ describe('element inspection', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('rejects when no DOM node is found', async () => {
-    const { cdp } = elementCdpFake({ 'DOM.getNodeForLocation': {} });
+  it('rejects when the page hit test returns null', async () => {
+    const { cdp } = elementCdpFake({ 'Runtime.evaluate': { result: { value: null } } });
     await expect(new ChromeController(cdp).inspectElementAt(1, 1)).rejects.toThrow('No element');
   });
 
-  it('rejects missing and zero-size box models', async () => {
-    const missing = elementCdpFake({ 'DOM.getBoxModel': { model: {} } });
+  it('rejects missing and zero-size bounds', async () => {
+    const missing = elementCdpFake({
+      'Runtime.evaluate': { result: { value: {
+        selector: 'body', xpath: 'body', tag: 'body', text: '', html: '', url: '',
+      } } },
+    });
     await expect(new ChromeController(missing.cdp).inspectElementAt(1, 1)).rejects.toThrow('bounds');
 
     const zero = elementCdpFake({
-      'DOM.getBoxModel': { model: { border: [4, 4, 4, 4, 4, 4, 4, 4] } },
+      'Runtime.evaluate': { result: { value: {
+        selector: 'body', xpath: 'body', tag: 'body', text: '', html: '', url: '',
+        bounds: { x: 4, y: 4, width: 0, height: 0 },
+      } } },
     });
     await expect(new ChromeController(zero.cdp).inspectElementAt(1, 1)).rejects.toThrow('positive size');
   });
