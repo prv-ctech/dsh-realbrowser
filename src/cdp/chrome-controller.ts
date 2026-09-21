@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CDPClient } from './cdp-client.js';
-import type { BrowserInput, BrowserSnapshot, ViewportMetrics } from '../browser/protocol.js';
+import type { BrowserInput, BrowserSnapshot, PickedElementResult, ViewportMetrics } from '../browser/protocol.js';
 
 /** Build layouts used by the puppeteer / playwright download caches. */
 const CACHED_BUILD_LAYOUTS = [
@@ -269,6 +269,117 @@ export class ChromeController {
     } else {
       await this.cdp.send('Input.insertText', { text: input.text });
     }
+  }
+
+  async inspectElementAt(
+    x: number,
+    y: number,
+  ): Promise<Omit<PickedElementResult, 'screenshotBase64' | 'screenshotMediaType'>> {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Element coordinates must be finite');
+    const location = await this.cdp.send<{ nodeId?: number }>('DOM.getNodeForLocation', {
+      x,
+      y,
+      includeUserAgentShadowDOM: true,
+    });
+    if (!location.nodeId) throw new Error('No element found at coordinates');
+
+    const box = await this.cdp.send<{ model?: { border?: number[]; content?: number[] } }>('DOM.getBoxModel', {
+      nodeId: location.nodeId,
+    });
+    const quad = box.model?.border ?? box.model?.content;
+    if (!quad || quad.length < 8 || quad.some((value) => !Number.isFinite(value))) {
+      throw new Error('Element bounds are unavailable');
+    }
+    const xs = [quad[0], quad[2], quad[4], quad[6]];
+    const ys = [quad[1], quad[3], quad[5], quad[7]];
+    const left = Math.min(...xs);
+    const top = Math.min(...ys);
+    const right = Math.max(...xs);
+    const bottom = Math.max(...ys);
+    const bounds = { x: left, y: top, width: right - left, height: bottom - top };
+    if (bounds.width <= 0 || bounds.height <= 0) throw new Error('Element bounds must have positive size');
+
+    const resolved = await this.cdp.send<{ object?: { objectId?: string } }>('DOM.resolveNode', {
+      nodeId: location.nodeId,
+    });
+    const objectId = resolved.object?.objectId;
+    if (!objectId) throw new Error('Element remote object is unavailable');
+
+    try {
+      const response = await this.cdp.send<{ result?: { value?: any } }>('Runtime.callFunctionOn', {
+        objectId,
+        returnByValue: true,
+        functionDeclaration: `function() {
+          const cssEscape = (value) => globalThis.CSS?.escape
+            ? globalThis.CSS.escape(value)
+            : value.replace(/[^a-zA-Z0-9_-]/g, (char) => '\\' + char.codePointAt(0).toString(16) + ' ');
+          const css = [];
+          for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
+            if (element.id) {
+              css.unshift('#' + cssEscape(element.id));
+              break;
+            }
+            let part = element.tagName.toLowerCase();
+            const siblings = element.parentElement
+              ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
+              : [];
+            if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(element) + 1) + ')';
+            css.unshift(part);
+          }
+          const xpathLiteral = (value) => {
+            if (!value.includes('"')) return '"' + value + '"';
+            if (!value.includes("'")) return "'" + value + "'";
+            return 'concat("' + value.split('"').join('",\'"\',"') + '")';
+          };
+          const xpath = [];
+          for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
+            if (element.id) {
+              xpath.unshift('//*[@id=' + xpathLiteral(element.id) + ']');
+              break;
+            }
+            const tag = element.tagName.toLowerCase();
+            const siblings = element.parentElement
+              ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
+              : [];
+            xpath.unshift(tag + (siblings.length > 1 ? '[' + (siblings.indexOf(element) + 1) + ']' : ''));
+          }
+          return {
+            selector: css.join(' > '),
+            xpath: xpath.join('/'),
+            tag: this.tagName.toLowerCase(),
+            text: (this.textContent || '').trim().slice(0, 500),
+            html: (this.outerHTML || '').slice(0, 4000),
+            url: location.href,
+          };
+        }`,
+      });
+      const value = response.result?.value;
+      if (!value || typeof value !== 'object') throw new Error('Element metadata is unavailable');
+      return {
+        selector: typeof value.selector === 'string' ? value.selector : '',
+        xpath: typeof value.xpath === 'string' ? value.xpath : '',
+        tag: typeof value.tag === 'string' ? value.tag.toLowerCase() : '',
+        text: typeof value.text === 'string' ? value.text.slice(0, 500) : '',
+        html: typeof value.html === 'string' ? value.html.slice(0, 4000) : '',
+        url: typeof value.url === 'string' ? value.url : '',
+        bounds,
+      };
+    } finally {
+      await this.cdp.send('Runtime.releaseObject', { objectId });
+    }
+  }
+
+  async pickElementAt(x: number, y: number): Promise<PickedElementResult> {
+    const selection = await this.inspectElementAt(x, y);
+    const shot = await this.cdp.send<{ data: string }>('Page.captureScreenshot', {
+      format: 'webp',
+      quality: 82,
+      fromSurface: true,
+      captureBeyondViewport: true,
+      clip: { ...selection.bounds, scale: 1 },
+    });
+    if (typeof shot.data !== 'string' || !shot.data) throw new Error('Element screenshot returned no image data');
+    return { ...selection, screenshotBase64: shot.data, screenshotMediaType: 'image/webp' };
   }
 
   async startScreencast(maxWidth: number, maxHeight: number): Promise<void> {

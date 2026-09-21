@@ -167,6 +167,15 @@ export function createHostPlugin(options?: HostPluginOptions) {
                 await chrome.stopScreencast();
                 res.statusCode = 200;
                 res.end(JSON.stringify({ ok: true }));
+              } else if (method === 'hover-element' || method === 'pick-element') {
+                const x = finiteNumber(payload.x, 'x');
+                const y = finiteNumber(payload.y, 'y');
+                await ensureChrome();
+                const result = method === 'hover-element'
+                  ? await chrome.inspectElementAt(x, y)
+                  : await chrome.pickElementAt(x, y);
+                res.statusCode = 200;
+                res.end(JSON.stringify(result));
               } else {
                 res.statusCode = 404;
                 res.end(JSON.stringify({ error: 'unknown method' }));
@@ -411,6 +420,20 @@ export function createHostPlugin(options?: HostPluginOptions) {
           await ensureChrome();
           await chrome.stopScreencast();
           return { ok: true };
+        });
+
+        harness.handle?.('realbrowser-hover-element', async (args: { x: number; y: number }) => {
+          const x = finiteNumber(args?.x, 'x');
+          const y = finiteNumber(args?.y, 'y');
+          await ensureChrome();
+          return chrome.inspectElementAt(x, y);
+        });
+
+        harness.handle?.('realbrowser-pick-element', async (args: { x: number; y: number }) => {
+          const x = finiteNumber(args?.x, 'x');
+          const y = finiteNumber(args?.y, 'y');
+          await ensureChrome();
+          return chrome.pickElementAt(x, y);
         });
 
         if (harness.registerTool) {

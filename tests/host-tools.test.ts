@@ -154,6 +154,8 @@ describe('Host Plugin', () => {
       latestFrameAfter: vi.fn((after: number) => after < 4
         ? { sequence: 4, data: Buffer.from('jpeg-bytes'), mediaType: 'image/jpeg' }
         : null),
+      inspectElementAt: vi.fn().mockResolvedValue({ selector: '#hover', bounds: { x: 1, y: 2, width: 3, height: 4 } }),
+      pickElementAt: vi.fn().mockResolvedValue({ selector: '#pick', screenshotMediaType: 'image/webp' }),
       close: vi.fn(),
     };
     const plugin = createHostPlugin({
@@ -177,6 +179,11 @@ describe('Host Plugin', () => {
     await handles.get('realbrowser-input')!({ kind: 'text', text: 'hello' });
     await handles.get('realbrowser-start-stream')!({ maxWidth: 1200, maxHeight: 800 });
     await handles.get('realbrowser-stop-stream')!();
+    expect(await handles.get('realbrowser-hover-element')!({ x: 12, y: 34 }))
+      .toEqual({ selector: '#hover', bounds: { x: 1, y: 2, width: 3, height: 4 } });
+    expect(await handles.get('realbrowser-pick-element')!({ x: 12, y: 34 }))
+      .toEqual({ selector: '#pick', screenshotMediaType: 'image/webp' });
+    await expect(handles.get('realbrowser-pick-element')!({ x: Infinity, y: 1 })).rejects.toThrow('finite');
 
     expect(mockChrome.navigate).toHaveBeenCalledWith('https://next.test');
     expect(mockChrome.goBack).toHaveBeenCalledOnce();
