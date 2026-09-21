@@ -20,7 +20,7 @@ dsh plugin --profile tauri remove realbrowser
 ```
 
 ```bash
-dsh plugin --profile tauri add https://github.com/prv-ctech/dsh-realbrowser/releases/download/v0.0.3/dsh-realbrowser-0.0.3.tgz
+dsh plugin --profile tauri add https://github.com/prv-ctech/dsh-realbrowser/releases/download/v0.0.4/dsh-realbrowser-0.0.4.tgz
 ```
 
 Fully restart DeepSeek Harness, then open **RealBrowser** from the browser button or sidebar.

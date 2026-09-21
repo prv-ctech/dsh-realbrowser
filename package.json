@@ -1,6 +1,6 @@
 {
   "name": "dsh-realbrowser",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Full agentic web browser for DeepSeek Harness",
   "license": "MIT",
   "repository": {
@@ -38,7 +38,8 @@
   "scripts": {
     "build": "tsc && node scripts/build-client.js",
     "test": "vitest run",
-    "verify": "tsx scripts/verify.ts"
+    "verify": "tsx scripts/verify.ts",
+    "pretest": "npm run build"
   },
   "dependencies": {
     "ws": "^8.18.0"
