@@ -1,6 +1,6 @@
 {
   "name": "dsh-realbrowser",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Full agentic web browser for DeepSeek Harness",
   "license": "MIT",
   "repository": {

@@ -1,4 +1,4 @@
 # realbrowser bundle patch
 - insert:
     - id: realbrowser
-      name: 'realbrowser'
+      name: 'dsh-realbrowser'
