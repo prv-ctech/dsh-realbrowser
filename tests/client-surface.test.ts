@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { pointerInputFromEvent } from '../src/client/index.js';
+import { mapElementBounds, pointerInputFromEvent } from '../src/client/index.js';
 
 describe('browser surface input', () => {
+  it('scales element bounds into the displayed frame', () => {
+    expect(mapElementBounds(
+      { x: 100, y: 60, width: 180, height: 44 },
+      { width: 500, height: 250 },
+      { width: 1000, height: 500 },
+    )).toEqual({ left: 50, top: 30, width: 90, height: 22 });
+  });
+
   it('maps displayed pointer coordinates to CSS viewport coordinates', () => {
     expect(pointerInputFromEvent(
       { clientX: 260, clientY: 145, button: 0 },

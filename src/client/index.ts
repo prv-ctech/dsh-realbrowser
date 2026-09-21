@@ -1,14 +1,8 @@
 // `react` is external and supplied by DSH's client module loader.
 import React from 'react';
 import { VIEWPORT_GROUPS, mapPreviewPoint, resolveViewportMetrics } from '../browser/viewports.js';
-import type { BrowserInput, BrowserSnapshot, ViewportMetrics } from '../browser/protocol.js';
-
-export interface PickedElement {
-  selector: string;
-  tag: string;
-  text: string;
-  xpath?: string;
-}
+import type { BrowserInput, BrowserSnapshot, ElementBounds, PickedElementResult, ViewportMetrics } from '../browser/protocol.js';
+import { attachPickedElement, formatPickedElementDraft } from './chat-bridge.js';
 
 export interface RealBrowserPanelProps {
   host?: any;
@@ -17,35 +11,10 @@ export interface RealBrowserPanelProps {
   visible?: boolean;
 }
 
-export function formatPickedElementMessage(el: PickedElement): string {
-  if (el.xpath) {
-    return `Element selected: \`${el.selector}\` [XPath: \`${el.xpath}\`] (<${el.tag}>: "${el.text}")`;
-  }
-  return `Element selected: \`${el.selector}\` (<${el.tag}>: "${el.text}")`;
-}
-
 export function normalizeHttpUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '';
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-}
-
-// Removed in Task 7 after the Conversation service replaces the legacy bridge.
-export function injectIntoChatTextarea(text: string): boolean {
-  if (typeof document === 'undefined') return false;
-  const textarea = document.querySelector('textarea');
-  if (!textarea) return false;
-  const newText = textarea.value ? `${textarea.value}\n${text}` : text;
-  const win = typeof window !== 'undefined' ? window : (globalThis as any);
-  const setter = win.HTMLTextAreaElement?.prototype
-    ? Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, 'value')?.set
-    : undefined;
-  if (setter) setter.call(textarea, newText);
-  else textarea.value = newText;
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-  textarea.dispatchEvent(new Event('change', { bubbles: true }));
-  textarea.focus();
-  return true;
 }
 
 const callApi = async (method: string, payload?: any) => {
@@ -74,6 +43,21 @@ export function pointerInputFromEvent(
   if (type === 'mouseMoved') return { kind: 'mouse', type, ...point };
   const button = mouseButtons[event.button ?? 0] ?? 'left';
   return { kind: 'mouse', type, ...point, button, clickCount: 1 };
+}
+
+export function mapElementBounds(
+  bounds: ElementBounds,
+  preview: { width: number; height: number },
+  viewport: Pick<ViewportMetrics, 'width' | 'height'>,
+): { left: number; top: number; width: number; height: number } {
+  const scaleX = preview.width / viewport.width;
+  const scaleY = preview.height / viewport.height;
+  return {
+    left: bounds.x * scaleX,
+    top: bounds.y * scaleY,
+    width: bounds.width * scaleX,
+    height: bounds.height * scaleY,
+  };
 }
 
 function modifiersFromEvent(event: any): number {
@@ -107,6 +91,10 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
   const [frameUrl, setFrameUrl] = React.useState('');
   const [pickerActive, setPickerActive] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [pickerOverlay, setPickerOverlay] = React.useState(null) as [
+    { left: number; top: number; width: number; height: number } | null,
+    (value: any) => void,
+  ];
   const surfaceRef = React.useRef(null) as { current: any };
   const previewRef = React.useRef(null) as { current: any };
   const objectUrlRef = React.useRef(null) as { current: string | null };
@@ -116,6 +104,9 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
   const navigationStateRef = React.useRef({ version: 0, pending: false }) as {
     current: { version: number; pending: boolean };
   };
+  const hoverPendingRef = React.useRef(false) as { current: boolean };
+  const pickPendingRef = React.useRef(false) as { current: boolean };
+  const pickerGenerationRef = React.useRef(0) as { current: number };
 
   const callRpc = (method: string, payload?: any) => {
     const rpcMethod = method.startsWith('realbrowser-') ? method : `realbrowser-${method}`;
@@ -134,6 +125,8 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
     navigationStateRef.current.pending = true;
     setInputUrl(normalized);
     setSnapshot((current: BrowserSnapshot) => ({ ...current, url: normalized, loading: true }));
+    setPickerOverlay(null);
+    pickerGenerationRef.current += 1;
     setError('');
     void callRpc('navigate', { url: normalized })
       .catch(reportError)
@@ -264,9 +257,81 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
     return () => observer.disconnect();
   }, [visible, viewportId]);
 
+  const pickerPoint = (event: any) => {
+    const rect = surfaceRef.current?.getBoundingClientRect?.();
+    if (!rect?.width || !rect?.height) return null;
+    const input = pointerInputFromEvent(event, rect, metricsRef.current, 'mouseMoved');
+    return input.kind === 'mouse' ? { x: input.x, y: input.y, rect } : null;
+  };
+
+  const hoverPicker = (event: any) => {
+    if (hoverPendingRef.current) return;
+    const point = pickerPoint(event);
+    if (!point) return;
+    event.preventDefault();
+    const generation = pickerGenerationRef.current;
+    hoverPendingRef.current = true;
+    void callRpc('hover-element', { x: point.x, y: point.y })
+      .then((result: any) => {
+        if (generation !== pickerGenerationRef.current || !result?.bounds) return;
+        const previewRect = previewRef.current?.getBoundingClientRect?.();
+        const imageRect = surfaceRef.current?.getBoundingClientRect?.();
+        if (!previewRect || !imageRect) return;
+        const scaled = mapElementBounds(result.bounds, imageRect, metricsRef.current);
+        setPickerOverlay({
+          left: imageRect.left - previewRect.left + (previewRef.current?.scrollLeft ?? 0) + scaled.left,
+          top: imageRect.top - previewRect.top + (previewRef.current?.scrollTop ?? 0) + scaled.top,
+          width: scaled.width,
+          height: scaled.height,
+        });
+      })
+      .catch(reportError)
+      .finally(() => { hoverPendingRef.current = false; });
+  };
+
+  const pickElement = (event: any) => {
+    if (pickPendingRef.current) return;
+    const point = pickerPoint(event);
+    if (!point) return;
+    event.preventDefault();
+    event.stopPropagation?.();
+    pickPendingRef.current = true;
+    let result: PickedElementResult | undefined;
+    void callRpc('pick-element', { x: point.x, y: point.y })
+      .then(async (value: PickedElementResult) => {
+        result = value;
+        await attachPickedElement(props.ctx, props.scope?.sessionId ?? '', value);
+        pickerGenerationRef.current += 1;
+        setPickerOverlay(null);
+        setPickerActive(false);
+        setError('');
+      })
+      .catch(async (reason: unknown) => {
+        if (result) {
+          try { await navigator.clipboard?.writeText?.(formatPickedElementDraft(result)); } catch {}
+          reportError(`Selection copied to clipboard. ${reason instanceof Error ? reason.message : String(reason)}`);
+        } else {
+          reportError(reason);
+        }
+      })
+      .finally(() => { pickPendingRef.current = false; });
+  };
+
+  const togglePicker = () => {
+    pickerGenerationRef.current += 1;
+    setPickerOverlay(null);
+    setPickerActive(!pickerActive);
+    setError('');
+  };
+
   const forwardPointer = (event: any, type: 'mouseMoved' | 'mousePressed' | 'mouseReleased') => {
     const rect = surfaceRef.current?.getBoundingClientRect?.();
     if (!rect?.width || !rect?.height) return;
+    if (pickerActive) {
+      if (type === 'mouseMoved') hoverPicker(event);
+      else event.preventDefault();
+      return;
+    }
     event.preventDefault();
     if (type === 'mousePressed') surfaceRef.current?.focus?.();
     sendInput(pointerInputFromEvent(event, rect, metricsRef.current, type));
@@ -286,6 +351,11 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
 
   const forwardKey = (event: any, type: 'keyDown' | 'keyUp') => {
     if (typeof event.key !== 'string' || typeof event.code !== 'string') return;
+    if (pickerActive && type === 'keyDown' && event.key === 'Escape') {
+      event.preventDefault();
+      togglePicker();
+      return;
+    }
     event.preventDefault();
     const modifiers = modifiersFromEvent(event);
     sendInput({ kind: 'key', type, key: event.key, code: event.code, modifiers });
@@ -343,7 +413,7 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
         type: 'button', onClick: () => navigateTo(inputUrl), style: buttonStyle,
       }, 'Go'),
       React.createElement('button', {
-        type: 'button', onClick: () => setPickerActive(!pickerActive),
+        type: 'button', onClick: togglePicker,
         'aria-pressed': pickerActive,
         style: {
           ...buttonStyle,
@@ -374,7 +444,7 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
       {
         ref: previewRef,
         style: {
-          flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position: 'relative', flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-secondary)',
         },
       },
@@ -389,6 +459,7 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
         onMouseMove: (event: any) => forwardPointer(event, 'mouseMoved'),
         onMouseDown: (event: any) => forwardPointer(event, 'mousePressed'),
         onMouseUp: (event: any) => forwardPointer(event, 'mouseReleased'),
+        onClick: pickerActive ? pickElement : undefined,
         onWheel: forwardWheel,
         onKeyDown: (event: any) => forwardKey(event, 'keyDown'),
         onKeyUp: (event: any) => forwardKey(event, 'keyUp'),
@@ -397,6 +468,16 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
           userSelect: 'none', cursor: pickerActive ? 'crosshair' : 'default',
         },
       }),
+      pickerActive && pickerOverlay ? React.createElement('div', {
+        'aria-hidden': true,
+        style: {
+          position: 'absolute', pointerEvents: 'none', boxSizing: 'border-box',
+          left: `${pickerOverlay.left}px`, top: `${pickerOverlay.top}px`,
+          width: `${pickerOverlay.width}px`, height: `${pickerOverlay.height}px`,
+          border: '2px solid var(--dsw-alias-brand-primary)',
+          background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)',
+        },
+      }) : null,
       !frameUrl ? React.createElement('div', { role: 'status' }, snapshot.loading ? 'Loading page…' : 'Waiting for browser frame…') : null,
     ),
   );

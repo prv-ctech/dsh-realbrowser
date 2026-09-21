@@ -2,8 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   RealBrowserPanel,
   createClientPlugin,
-  formatPickedElementMessage,
-  injectIntoChatTextarea,
   normalizeHttpUrl,
 } from '../src/client/index.js';
 
@@ -18,21 +16,6 @@ describe('client helpers', () => {
     expect(normalizeHttpUrl(input)).toBe(expected);
   });
 
-  it('keeps legacy picked-element formatting until chat handoff replaces it', () => {
-    expect(formatPickedElementMessage({
-      selector: '#submit', tag: 'button', text: 'Submit', xpath: '//*[@id="submit"]',
-    })).toContain('XPath');
-  });
-
-  it('returns false when no legacy chat textarea exists', () => {
-    const original = (globalThis as any).document;
-    (globalThis as any).document = { querySelector: () => null };
-    try {
-      expect(injectIntoChatTextarea('text')).toBe(false);
-    } finally {
-      (globalThis as any).document = original;
-    }
-  });
 });
 
 describe('RealBrowserPanel', () => {
@@ -89,6 +72,59 @@ describe('RealBrowserPanel', () => {
     expect(host.call).toHaveBeenNthCalledWith(1, 'realbrowser-command', { command: 'back' });
     expect(host.call).toHaveBeenNthCalledWith(2, 'realbrowser-command', { command: 'forward' });
     expect(host.call).toHaveBeenNthCalledWith(3, 'realbrowser-command', { command: 'reload' });
+  });
+
+  it('throttles picker hover requests and selects through host RPC', async () => {
+    const created: any[] = [];
+    let resolveHover!: (value: unknown) => void;
+    const hover = new Promise((resolve) => { resolveHover = resolve; });
+    const host = {
+      call: vi.fn((method: string) => {
+        if (method === 'realbrowser-hover-element') return hover;
+        if (method === 'realbrowser-pick-element') return Promise.resolve({
+          selector: '#picked', xpath: '//*[@id="picked"]', tag: 'div', text: '', html: '<div id="picked"></div>',
+          url: 'https://example.test', bounds: { x: 10, y: 10, width: 20, height: 20 },
+          screenshotBase64: Buffer.from('webp').toString('base64'), screenshotMediaType: 'image/webp',
+        });
+        return Promise.resolve({});
+      }),
+    };
+    let stateIndex = 0;
+    let refIndex = 0;
+    const surface = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 500, height: 250 }) };
+    const preview = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 500, height: 250 }), scrollLeft: 0, scrollTop: 0 };
+    (globalThis as any).React = {
+      useState: vi.fn((initial: any) => {
+        const index = stateIndex++;
+        if (index === 3) return ['blob:frame', vi.fn()];
+        if (index === 4) return [true, vi.fn()];
+        return [initial, vi.fn()];
+      }),
+      useRef: vi.fn((initial: any) => {
+        const index = refIndex++;
+        return { current: index === 0 ? surface : index === 1 ? preview : initial };
+      }),
+      useEffect: vi.fn(),
+      createElement: vi.fn((type: any, props: any, ...children: any[]) => {
+        const element = { type, props: props ?? {}, children };
+        created.push(element);
+        return element;
+      }),
+    };
+
+    RealBrowserPanel({ host, visible: false, scope: { sessionId: 'session-1' } });
+    const image = created.find((element) => element.type === 'img');
+    const event = { clientX: 260, clientY: 145, button: 0, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    image.props.onMouseMove(event);
+    const pickerButton = created.find((element) => element.type === 'button' && element.props['aria-pressed'] === true);
+    pickerButton.props.onClick();
+    image.props.onMouseMove(event);
+    expect(host.call.mock.calls.filter(([method]) => method === 'realbrowser-hover-element')).toHaveLength(1);
+    resolveHover({ bounds: { x: 10, y: 10, width: 20, height: 20 } });
+    await Promise.resolve();
+
+    image.props.onClick(event);
+    expect(host.call).toHaveBeenCalledWith('realbrowser-pick-element', expect.any(Object));
   });
 
   it('registers a sidebar component that preserves Better Sidebar props', () => {
