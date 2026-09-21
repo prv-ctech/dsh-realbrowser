@@ -20,26 +20,67 @@ export function generatePickerScript(): string {
     document.documentElement.appendChild(overlay);
   }
 
+  function escapeIdent(val) {
+    return (window.CSS && CSS.escape) ? CSS.escape(val) : val;
+  }
+
   function getSelector(el) {
-    if (el.id) return '#' + el.id;
+    if (el.id) return '#' + escapeIdent(el.id);
     let path = [];
     while (el && el.nodeType === Node.ELEMENT_NODE) {
       let selector = el.nodeName.toLowerCase();
       if (el.id) {
-        selector += '#' + el.id;
+        selector += '#' + escapeIdent(el.id);
         path.unshift(selector);
         break;
       } else {
-        let sib = el, nth = 1;
-        while (sib = sib.previousElementSibling) {
-          if (sib.nodeName.toLowerCase() === selector) nth++;
+        if (el.classList && el.classList.length > 0) {
+          selector += Array.from(el.classList).map(function(c) { return '.' + escapeIdent(c); }).join('');
         }
-        if (nth !== 1) selector += ":nth-of-type(" + nth + ")";
+        let sib = el, nth = 1, hasSameSiblings = false;
+        while (sib = sib.previousElementSibling) {
+          if (sib.nodeName.toLowerCase() === el.nodeName.toLowerCase()) {
+            nth++;
+            hasSameSiblings = true;
+          }
+        }
+        let nextSib = el;
+        while (nextSib = nextSib.nextElementSibling) {
+          if (nextSib.nodeName.toLowerCase() === el.nodeName.toLowerCase()) {
+            hasSameSiblings = true;
+            break;
+          }
+        }
+        if (hasSameSiblings) selector += ":nth-of-type(" + nth + ")";
       }
       path.unshift(selector);
       el = el.parentNode;
     }
     return path.join(' > ');
+  }
+
+  function getXPath(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return '';
+    if (el.id) return '//*[@id="' + el.id + '"]';
+    let path = [];
+    while (el && el.nodeType === Node.ELEMENT_NODE) {
+      if (el.id) {
+        path.unshift('/*[@id="' + el.id + '"]');
+        break;
+      }
+      let tag = el.nodeName.toLowerCase();
+      let index = 1;
+      let sib = el.previousElementSibling;
+      while (sib) {
+        if (sib.nodeName.toLowerCase() === tag) {
+          index++;
+        }
+        sib = sib.previousElementSibling;
+      }
+      path.unshift(tag + '[' + index + ']');
+      el = el.parentNode;
+    }
+    return path.length ? '/' + path.join('/') : '';
   }
 
   window.addEventListener('message', (e) => {
@@ -70,11 +111,12 @@ export function generatePickerScript(): string {
     if (overlay) overlay.style.display = 'none';
     const target = e.target;
     const selector = getSelector(target);
+    const xpath = getXPath(target);
     const tag = target.tagName.toLowerCase();
     const text = (target.innerText || target.textContent || '').trim().slice(0, 100);
     window.parent.postMessage({
       type: 'REALBROWSER_ELEMENT_PICKED',
-      payload: { selector, tag, text }
+      payload: { selector, xpath, tag, text }
     }, '*');
   }, true);
 })();
