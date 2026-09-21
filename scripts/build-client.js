@@ -1,6 +1,8 @@
 import esbuild from 'esbuild';
 import fs from 'fs';
 
+const { name: packageName } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+
 async function build() {
   const result = await esbuild.build({
     entryPoints: ['src/client/index.ts'],
@@ -19,7 +21,7 @@ async function build() {
 
   const code = result.outputFiles[0].text;
   const wrapped = `window.__ModuleLoader__.load({
-  id: "realbrowser",
+  id: ${JSON.stringify(packageName)},
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
