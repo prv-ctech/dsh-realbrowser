@@ -514,6 +514,7 @@ export class ChromeController {
       void (async () => {
         try {
           await this.waitForDebugger(20, () => settled);
+          if (settled) return;
           debuggerReady = true;
           const wsUrl = await this.getPageWsUrl();
           await this.cdp.connect(wsUrl);

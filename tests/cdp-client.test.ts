@@ -366,7 +366,7 @@ describe('ChromeController', () => {
   it('reports bounded stderr when Chrome exits before debugger readiness', async () => {
     const earlyMarker = 'REALBROWSER_EARLY_STDERR_SHOULD_BE_DISCARDED';
     const trailingMarker = 'REALBROWSER_TRAILING_STDERR_MARKER';
-    const stderr = `${earlyMarker}\n${'x'.repeat(17 * 1024)}\n${trailingMarker}\n`;
+    const stderr = `${earlyMarker}\n${'x'.repeat(17 * 1024)}\n${trailingMarker}`;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realbrowser-fake-chrome-'));
     const binary = path.join(dir, 'fake-chrome');
     fs.writeFileSync(
@@ -389,10 +389,41 @@ describe('ChromeController', () => {
       expect(error?.message).toContain('exit code 23');
       expect(error?.message).toContain(trailingMarker);
       expect(error?.message).not.toContain(earlyMarker);
+      expect(Buffer.byteLength(error!.message.split('stderr:\n')[1])).toBe(16 * 1024);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 7_000);
+
+  it('stops initialization when Chrome closes during debugger readiness', async () => {
+    let resolveDebugger!: () => void;
+    const connect = vi.fn().mockResolvedValue(undefined);
+    const fakeCdp = { connect, close: vi.fn() } as unknown as CDPClient;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'realbrowser-fake-chrome-'));
+    const binary = path.join(dir, 'fake-chrome');
+    fs.writeFileSync(binary, '#!/usr/bin/env node\nprocess.exit(23);\n', { mode: 0o755 });
+    const controller = new ChromeController(fakeCdp, 0, binary);
+    const waitForDebugger = vi.spyOn(controller as any, 'waitForDebugger').mockImplementation(
+      () => new Promise<void>((resolve) => { resolveDebugger = resolve; }),
+    );
+    const getPageWsUrl = vi.spyOn(controller as any, 'getPageWsUrl').mockResolvedValue('ws://unused');
+    const initialize = vi.spyOn(controller, 'initialize').mockResolvedValue(undefined);
+
+    try {
+      const launch = controller.launch();
+      await expect(launch).rejects.toThrow('exit code 23');
+      resolveDebugger();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForDebugger).toHaveBeenCalledOnce();
+      expect(getPageWsUrl).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+      expect(initialize).not.toHaveBeenCalled();
+    } finally {
+      controller.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('resets a Chrome-assigned port before relaunch', async () => {
     const controller = new ChromeController(mockCdp, 0, 'nonexistent-chrome-binary-test-xyz');
