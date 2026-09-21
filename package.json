@@ -1,6 +1,6 @@
 {
   "name": "realbrowser",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Interactive embedded browser plugin for DSH with Chrome DevTools and Element Picker",
   "type": "module",
   "main": "dist/index.js",

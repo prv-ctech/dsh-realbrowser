@@ -128,6 +128,55 @@ export function resolveChromeBinary(explicit?: string, lookup: ChromeLookup = {}
   );
 }
 
+const ELEMENT_METADATA_FUNCTION = String.raw`function() {
+  const cssEscape = (value) => globalThis.CSS?.escape
+    ? globalThis.CSS.escape(value)
+    : value.replace(/[^a-zA-Z0-9_-]/g, (char) => '\\' + char.codePointAt(0).toString(16) + ' ');
+  const css = [];
+  for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
+    if (element.id) {
+      css.unshift('#' + cssEscape(element.id));
+      break;
+    }
+    let part = element.tagName.toLowerCase();
+    const siblings = element.parentElement
+      ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
+      : [];
+    if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(element) + 1) + ')';
+    css.unshift(part);
+  }
+  const xpathLiteral = (value) => {
+    if (!value.includes('"')) return '"' + value + '"';
+    if (!value.includes("'")) return "'" + value + "'";
+    const items = [];
+    for (const [index, part] of value.split('"').entries()) {
+      if (index > 0) items.push("'\"'");
+      items.push('"' + part + '"');
+    }
+    return 'concat(' + items.join(', ') + ')';
+  };
+  const xpath = [];
+  for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
+    if (element.id) {
+      xpath.unshift('//*[@id=' + xpathLiteral(element.id) + ']');
+      break;
+    }
+    const tag = element.tagName.toLowerCase();
+    const siblings = element.parentElement
+      ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
+      : [];
+    xpath.unshift(tag + (siblings.length > 1 ? '[' + (siblings.indexOf(element) + 1) + ']' : ''));
+  }
+  return {
+    selector: css.join(' > '),
+    xpath: xpath.join('/'),
+    tag: this.tagName.toLowerCase(),
+    text: (this.textContent || '').trim().slice(0, 500),
+    html: (this.outerHTML || '').slice(0, 4000),
+    url: location.href,
+  };
+}`;
+
 export class ChromeController {
   private proc: ChildProcess | null = null;
   private cdp: CDPClient;
@@ -276,16 +325,19 @@ export class ChromeController {
     y: number,
   ): Promise<Omit<PickedElementResult, 'screenshotBase64' | 'screenshotMediaType'>> {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Element coordinates must be finite');
-    const location = await this.cdp.send<{ nodeId?: number }>('DOM.getNodeForLocation', {
+    const location = await this.cdp.send<{ nodeId?: number; backendNodeId?: number }>('DOM.getNodeForLocation', {
       x,
       y,
       includeUserAgentShadowDOM: true,
     });
-    if (!location.nodeId) throw new Error('No element found at coordinates');
+    const node = location.nodeId
+      ? { nodeId: location.nodeId }
+      : location.backendNodeId
+        ? { backendNodeId: location.backendNodeId }
+        : null;
+    if (!node) throw new Error('No element found at coordinates');
 
-    const box = await this.cdp.send<{ model?: { border?: number[]; content?: number[] } }>('DOM.getBoxModel', {
-      nodeId: location.nodeId,
-    });
+    const box = await this.cdp.send<{ model?: { border?: number[]; content?: number[] } }>('DOM.getBoxModel', node);
     const quad = box.model?.border ?? box.model?.content;
     if (!quad || quad.length < 8 || quad.some((value) => !Number.isFinite(value))) {
       throw new Error('Element bounds are unavailable');
@@ -299,9 +351,7 @@ export class ChromeController {
     const bounds = { x: left, y: top, width: right - left, height: bottom - top };
     if (bounds.width <= 0 || bounds.height <= 0) throw new Error('Element bounds must have positive size');
 
-    const resolved = await this.cdp.send<{ object?: { objectId?: string } }>('DOM.resolveNode', {
-      nodeId: location.nodeId,
-    });
+    const resolved = await this.cdp.send<{ object?: { objectId?: string } }>('DOM.resolveNode', node);
     const objectId = resolved.object?.objectId;
     if (!objectId) throw new Error('Element remote object is unavailable');
 
@@ -309,49 +359,7 @@ export class ChromeController {
       const response = await this.cdp.send<{ result?: { value?: any } }>('Runtime.callFunctionOn', {
         objectId,
         returnByValue: true,
-        functionDeclaration: `function() {
-          const cssEscape = (value) => globalThis.CSS?.escape
-            ? globalThis.CSS.escape(value)
-            : value.replace(/[^a-zA-Z0-9_-]/g, (char) => '\\' + char.codePointAt(0).toString(16) + ' ');
-          const css = [];
-          for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
-            if (element.id) {
-              css.unshift('#' + cssEscape(element.id));
-              break;
-            }
-            let part = element.tagName.toLowerCase();
-            const siblings = element.parentElement
-              ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
-              : [];
-            if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(element) + 1) + ')';
-            css.unshift(part);
-          }
-          const xpathLiteral = (value) => {
-            if (!value.includes('"')) return '"' + value + '"';
-            if (!value.includes("'")) return "'" + value + "'";
-            return 'concat("' + value.split('"').join('",\'"\',"') + '")';
-          };
-          const xpath = [];
-          for (let element = this; element && element.nodeType === 1; element = element.parentElement) {
-            if (element.id) {
-              xpath.unshift('//*[@id=' + xpathLiteral(element.id) + ']');
-              break;
-            }
-            const tag = element.tagName.toLowerCase();
-            const siblings = element.parentElement
-              ? Array.from(element.parentElement.children).filter((child) => child.tagName === element.tagName)
-              : [];
-            xpath.unshift(tag + (siblings.length > 1 ? '[' + (siblings.indexOf(element) + 1) + ']' : ''));
-          }
-          return {
-            selector: css.join(' > '),
-            xpath: xpath.join('/'),
-            tag: this.tagName.toLowerCase(),
-            text: (this.textContent || '').trim().slice(0, 500),
-            html: (this.outerHTML || '').slice(0, 4000),
-            url: location.href,
-          };
-        }`,
+        functionDeclaration: ELEMENT_METADATA_FUNCTION,
       });
       const value = response.result?.value;
       if (!value || typeof value !== 'object') throw new Error('Element metadata is unavailable');
@@ -426,12 +434,11 @@ export class ChromeController {
   }
 
   async ensureLaunched(headless = true): Promise<void> {
+    if (this.launchPromise) return this.launchPromise;
     if (this.proc) return;
-    if (!this.launchPromise) {
-      this.launchPromise = this.launch(headless).finally(() => {
-        this.launchPromise = null;
-      });
-    }
+    this.launchPromise = this.launch(headless).finally(() => {
+      this.launchPromise = null;
+    });
     return this.launchPromise;
   }
 

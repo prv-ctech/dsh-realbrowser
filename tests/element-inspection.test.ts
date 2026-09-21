@@ -60,6 +60,22 @@ describe('element inspection', () => {
     expect(send).not.toHaveBeenCalledWith('Page.captureScreenshot', expect.anything());
   });
 
+  it('sends a syntactically valid page metadata function', async () => {
+    const { cdp, send } = elementCdpFake();
+    await new ChromeController(cdp).inspectElementAt(120, 80);
+    const call = send.mock.calls.find(([method]) => method === 'Runtime.callFunctionOn');
+    expect(call?.[1].functionDeclaration).not.toContain('__name');
+    expect(() => new Function(`return (${call?.[1].functionDeclaration})`)).not.toThrow();
+  });
+
+  it('uses backend node IDs returned by real Chrome', async () => {
+    const { cdp, send } = elementCdpFake({ 'DOM.getNodeForLocation': { backendNodeId: 9 } });
+    const result = await new ChromeController(cdp).inspectElementAt(120, 80);
+    expect(result.selector).toContain('button');
+    expect(send).toHaveBeenCalledWith('DOM.getBoxModel', { backendNodeId: 9 });
+    expect(send).toHaveBeenCalledWith('DOM.resolveNode', { backendNodeId: 9 });
+  });
+
   it('rejects non-finite coordinates before calling CDP', async () => {
     const { cdp, send } = elementCdpFake();
     await expect(new ChromeController(cdp).inspectElementAt(Number.NaN, 1)).rejects.toThrow('finite');

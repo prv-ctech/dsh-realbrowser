@@ -138,11 +138,16 @@ describe('CDPClient', () => {
     const client = new CDPClient();
     await client.connect(wsUrl);
     const seen: unknown[] = [];
+    let resolveDelivered!: () => void;
+    const delivered = new Promise<void>((resolve) => { resolveDelivered = resolve; });
     client.on('Page.loadEventFired', () => { throw new Error('listener failed'); });
-    client.on('Page.loadEventFired', (params) => seen.push(params));
+    client.on('Page.loadEventFired', (params) => {
+      seen.push(params);
+      resolveDelivered();
+    });
 
     [...wss.clients].at(-1)!.send(JSON.stringify({ method: 'Page.loadEventFired', params: { timestamp: 1 } }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await delivered;
 
     expect(seen).toEqual([{ timestamp: 1 }]);
     client.close();
@@ -314,15 +319,22 @@ describe('ChromeController', () => {
     expect(launchSpy).not.toHaveBeenCalled();
   });
 
-  it('ensureLaunched launches once on concurrent calls', async () => {
+  it('ensureLaunched makes concurrent callers await the in-flight launch', async () => {
     const controller = new ChromeController(mockCdp);
     let resolveLaunch!: () => void;
     const launchPromise = new Promise<void>((res) => { resolveLaunch = res; });
-    const launchSpy = vi.spyOn(controller, 'launch').mockImplementation(() => launchPromise);
+    const launchSpy = vi.spyOn(controller, 'launch').mockImplementation(() => {
+      (controller as any).proc = { kill: vi.fn() };
+      return launchPromise;
+    });
 
     const p1 = controller.ensureLaunched();
-    const p2 = controller.ensureLaunched();
+    let secondSettled = false;
+    const p2 = controller.ensureLaunched().then(() => { secondSettled = true; });
+    await Promise.resolve();
+
     expect(launchSpy).toHaveBeenCalledTimes(1);
+    expect(secondSettled).toBe(false);
 
     resolveLaunch();
     await Promise.all([p1, p2]);

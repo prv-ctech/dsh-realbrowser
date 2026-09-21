@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   RealBrowserPanel,
+  apply as applyClient,
   createClientPlugin,
+  inject as clientInject,
   normalizeHttpUrl,
 } from '../src/client/index.js';
 
@@ -16,6 +18,24 @@ describe('client helpers', () => {
     expect(normalizeHttpUrl(input)).toBe(expected);
   });
 
+  it('does not require the optional Better Sidebar service', () => {
+    expect(clientInject).toEqual(['slots']);
+  });
+
+  it('does not read an undeclared host service during apply', () => {
+    const slots = { inject: vi.fn(), register: vi.fn() };
+    const ctx = new Proxy({
+      get: (name: string) => name === 'slots' ? slots : undefined,
+      inject: vi.fn(),
+    }, {
+      get(target, property, receiver) {
+        if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
+        throw new Error(`cannot get property "${String(property)}" without inject`);
+      },
+    });
+
+    expect(() => applyClient(ctx)).not.toThrow();
+  });
 });
 
 describe('RealBrowserPanel', () => {

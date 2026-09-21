@@ -530,8 +530,8 @@ export function createClientPlugin(host?: any) {
 }
 
 export const name = 'realbrowser';
-export const inject = ['betterSidebar', 'slots'];
+export const inject = ['slots'];
 
 export function apply(ctx: any) {
-  registerClient(ctx, (ctx as any).host);
+  registerClient(ctx);
 }
