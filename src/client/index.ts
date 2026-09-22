@@ -50,6 +50,13 @@ export function pointerInputFromEvent(
   return { kind: 'mouse', type, ...point, button, clickCount: 1 };
 }
 
+export function screencastSize(width: number, height: number, pixelRatio: number) {
+  return {
+    maxWidth: Math.max(1, Math.round(width * pixelRatio)),
+    maxHeight: Math.max(1, Math.round(height * pixelRatio)),
+  };
+}
+
 export function mapElementBounds(
   bounds: ElementBounds,
   preview: { width: number; height: number },
@@ -192,10 +199,10 @@ export function RealBrowserPanel(props: RealBrowserPanelProps = {}) {
     const run = async () => {
       try {
         const rect = previewRef.current?.getBoundingClientRect?.();
-        await callRpc('start-stream', {
-          maxWidth: Math.max(1, Math.round(rect?.width || 1)),
-          maxHeight: Math.max(1, Math.round(rect?.height || 1)),
-        });
+        await callRpc(
+          'start-stream',
+          screencastSize(rect?.width || 1, rect?.height || 1, window.devicePixelRatio || 1),
+        );
         started = true;
         if (!active) {
           stop();

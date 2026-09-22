@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { mapElementBounds, pointerInputFromEvent } from '../src/client/index.js';
+import { mapElementBounds, pointerInputFromEvent, screencastSize } from '../src/client/index.js';
 
 describe('browser surface input', () => {
+  it('requests device-pixel screencast dimensions', () => {
+    expect(screencastSize(500.2, 250.4, 2)).toEqual({ maxWidth: 1000, maxHeight: 501 });
+  });
+
   it('scales element bounds into the displayed frame', () => {
     expect(mapElementBounds(
       { x: 100, y: 60, width: 180, height: 44 },

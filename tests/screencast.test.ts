@@ -27,7 +27,7 @@ describe('Chrome screencast', () => {
     await Promise.resolve();
 
     expect(send).toHaveBeenCalledWith('Page.startScreencast', {
-      format: 'jpeg', quality: 80, maxWidth: 1200, maxHeight: 800, everyNthFrame: 1,
+      format: 'jpeg', quality: 90, maxWidth: 1200, maxHeight: 800, everyNthFrame: 1,
     });
     expect(send).toHaveBeenCalledWith('Page.screencastFrameAck', { sessionId: 7 });
     expect(send).toHaveBeenCalledWith('Page.screencastFrameAck', { sessionId: 8 });

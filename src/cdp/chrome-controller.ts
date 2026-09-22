@@ -416,7 +416,7 @@ export class ChromeController {
     try {
       await this.cdp.send('Page.startScreencast', {
         format: 'jpeg',
-        quality: 80,
+        quality: 90,
         maxWidth: Math.max(1, Math.round(maxWidth)),
         maxHeight: Math.max(1, Math.round(maxHeight)),
         everyNthFrame: 1,
